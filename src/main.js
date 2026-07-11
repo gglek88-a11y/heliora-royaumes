@@ -4405,6 +4405,13 @@ function renderAuthPanel() {
   if (!elements.authPanel) {
     return;
   }
+  const activeElement = document.activeElement;
+  const typingInAuthField = activeElement
+    && elements.authPanel.contains(activeElement)
+    && ["INPUT", "TEXTAREA"].includes(activeElement.tagName);
+  if (typingInAuthField) {
+    return;
+  }
 
   if (cloudConfig.provider !== "supabase") {
     elements.authPanel.innerHTML = `
