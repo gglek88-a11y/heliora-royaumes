@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Prototype web de strategie 4X fantasy pour Heliora Royaumes.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "node scripts/build-pages.mjs",
     "check": "node --check src/main.js && node --check src/networking/network-client.js && node --check src/storage/index.js && node --check src/auth/session.js && node --check src/game-state/index.js && node --check apps/server/src/server.mjs && node --check scripts/test-authoritative-server.mjs && node --check scripts/audit-static.mjs && node --check scripts/build-pages.mjs",

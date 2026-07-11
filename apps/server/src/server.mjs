@@ -872,8 +872,9 @@ export function createAuthoritativeServer(options = {}) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const port = Number(process.env.PORT ?? 8790);
+  const host = process.env.HOST ?? (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
   const server = createAuthoritativeServer({ port });
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`Heliora authoritative server: http://127.0.0.1:${port}`);
+  server.listen(port, host, () => {
+    console.log(`Heliora authoritative server: http://${host}:${port}`);
   });
 }
