@@ -1,4 +1,4 @@
-export const LOCAL_BACKEND_URL = "http://127.0.0.1:8787";
+export const LOCAL_BACKEND_URL = "http://127.0.0.1:8790";
 export const HERO_LEVEL_CAP = 60;
 
 export function createPlayerId() {

@@ -20,7 +20,13 @@ export interface KingdomSummary {
 
 export type AuthoritativeActionType =
   | "claim_starter_cache"
-  | "upgrade_citadel";
+  | "upgrade_citadel"
+  | "upgrade_building"
+  | "train_units"
+  | "claim_reward"
+  | "resolve_battle"
+  | "harvest_return"
+  | "guild_help";
 
 export interface AuthoritativeAction {
   type: AuthoritativeActionType;

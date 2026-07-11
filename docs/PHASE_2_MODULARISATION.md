@@ -86,3 +86,26 @@ Connecter progressivement le client aux routes autoritaires:
 4. recompenses;
 5. formation de troupes;
 6. combats serveur.
+
+## Phase 3 ajoutee
+
+La branche contient maintenant une premiere connexion client vers:
+
+- `/v1/me`
+- `/v1/kingdom`
+- `/v1/resources`
+- `/v1/actions`
+- `/v1/guilds`
+- `/v1/events`
+- `/v1/leaderboard`
+
+Les actions serveur-first couvrent:
+
+- amelioration de batiments;
+- formation de troupes;
+- recompenses quotidiennes/events;
+- resolution de combat;
+- retour de recolte;
+- aide de guilde.
+
+Le fallback local reste actif pour garder le prototype jouable quand le serveur n'est pas lance.

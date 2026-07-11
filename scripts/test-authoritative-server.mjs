@@ -79,7 +79,91 @@ try {
   if (upgrade.kingdom.level < 2) {
     throw new Error("Citadel upgrade did not advance kingdom level.");
   }
-  console.log(JSON.stringify({ ok: true, tested: ["profile", "kingdom", "resources", "idempotency", "upgrade_citadel"] }, null, 2));
+
+  const barracks = await api("/v1/actions", {
+    method: "POST",
+    body: JSON.stringify({
+      type: "upgrade_building",
+      idempotencyKey: "upgrade-barracks-test-1",
+      payload: { buildingId: "barracks" },
+    }),
+  });
+  if ((barracks.kingdom.buildings.barracks ?? 0) < 1) {
+    throw new Error("Server building upgrade did not build barracks.");
+  }
+
+  const training = await api("/v1/actions", {
+    method: "POST",
+    body: JSON.stringify({
+      type: "train_units",
+      idempotencyKey: "train-guards-test-1",
+      payload: { unitId: "guard", amount: 5 },
+    }),
+  });
+  if ((training.kingdom.units.guard ?? 0) < 5) {
+    throw new Error("Server training did not grant units.");
+  }
+
+  const battle = await api("/v1/actions", {
+    method: "POST",
+    body: JSON.stringify({
+      type: "resolve_battle",
+      idempotencyKey: "battle-test-1",
+      payload: {
+        node: { id: "n1", name: "Camp test", power: 40, enemyFormation: "charge", reward: { gold: 15 } },
+        formation: "shieldwall",
+        units: { guard: 5 },
+        heroPower: 120,
+      },
+    }),
+  });
+  if (!battle.report || typeof battle.report.victory !== "boolean") {
+    throw new Error("Server battle did not return a combat report.");
+  }
+
+  const guild = await api("/v1/guilds", {
+    method: "POST",
+    body: JSON.stringify({ name: "Alliance Test", tag: "TST" }),
+  });
+  if (!guild.guild?.id || guild.role !== "leader") {
+    throw new Error("Server guild creation failed.");
+  }
+
+  const invite = await api(`/v1/guilds/${guild.guild.id}/invites`, {
+    method: "POST",
+    body: JSON.stringify({ email: "ally@example.com" }),
+  });
+  if (!invite.invite?.id) {
+    throw new Error("Server guild invite failed.");
+  }
+
+  const events = await api("/v1/events");
+  if (!events.events?.length) {
+    throw new Error("Server events endpoint returned no live events.");
+  }
+
+  const leaderboard = await api("/v1/leaderboard");
+  if (!leaderboard.kingdoms?.length) {
+    throw new Error("Server leaderboard endpoint returned no kingdoms.");
+  }
+
+  console.log(JSON.stringify({
+    ok: true,
+    tested: [
+      "profile",
+      "kingdom",
+      "resources",
+      "idempotency",
+      "upgrade_citadel",
+      "upgrade_building",
+      "train_units",
+      "resolve_battle",
+      "guilds",
+      "invites",
+      "events",
+      "leaderboard",
+    ],
+  }, null, 2));
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(storageDir, { recursive: true, force: true });
