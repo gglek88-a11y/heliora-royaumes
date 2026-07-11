@@ -4,6 +4,8 @@ dist/
 .tools/
 
 server/storage/
+apps/server/storage/
+.tmp-authoritative-test/
 
 .agents/
 .codex/

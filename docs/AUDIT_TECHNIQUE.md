@@ -93,8 +93,8 @@ Tailles relevees:
 Risques critiques:
 
 - Le client peut encore modifier les ressources, recompenses et resultats en patchant le JavaScript.
-- Les combats PvE sont decidés localement.
-- Les timers et fins d'actions sont decidés localement.
+- Les combats PvE sont decides localement.
+- Les timers et fins d'actions sont decides localement.
 - Les recompenses de quetes/evenements sont attribuees localement.
 - La sauvegarde cloud stocke un `save_state` complet envoye par le client.
 - La session est stockee en `localStorage`, acceptable pour prototype mais a durcir pour mobile/production.
@@ -219,4 +219,3 @@ Approche retenue: migration progressive.
 - Pas de test Android.
 - Pas de verification directe des logs Supabase.
 - Pas d'analyse Lighthouse automatisee.
-

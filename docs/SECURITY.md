@@ -5,7 +5,7 @@
 - Ne jamais exposer de cle `service_role` dans le frontend.
 - Ne jamais faire confiance a une valeur envoyee par le client.
 - Les actions sensibles doivent devenir serveur-autorite.
-- Les resultats de combat et recompenses doivent etre decidés par le serveur.
+- Les resultats de combat et recompenses doivent etre decides par le serveur.
 - Les timers doivent utiliser une horloge serveur.
 
 ## Secrets
@@ -47,4 +47,3 @@ Le frontend ne doit jamais contenir:
 6. Rate limiting.
 7. CSP pour le client web.
 8. Tests de securite automatises.
-

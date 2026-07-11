@@ -6,11 +6,13 @@
   "description": "Prototype web de strategie 4X fantasy pour Heliora Royaumes.",
   "scripts": {
     "build": "node scripts/build-pages.mjs",
-    "check": "node --check src/main.js",
+    "check": "node --check src/main.js && node --check src/networking/network-client.js && node --check src/storage/index.js && node --check src/auth/session.js && node --check src/game-state/index.js && node --check apps/server/src/server.mjs && node --check scripts/test-authoritative-server.mjs && node --check scripts/audit-static.mjs && node --check scripts/build-pages.mjs",
     "audit:static": "node scripts/audit-static.mjs",
-    "test": "npm run check && npm run audit:static && npm run build",
+    "test:server": "node scripts/test-authoritative-server.mjs",
+    "test": "npm run check && npm run audit:static && npm run test:server && npm run build",
     "dev": "vite --host 127.0.0.1 --port 5176",
     "dev:any": "vite --host 0.0.0.0 --port 5176",
+    "server:authoritative": "node apps/server/src/server.mjs",
     "backend": "node server/mock-backend.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 4176"
   },

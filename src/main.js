@@ -1,7 +1,8 @@
-const STORAGE_KEY = "heliora-web-kingdom-v1";
-const AUTH_STORAGE_KEY = "heliora-supabase-session-v1";
-const LOCAL_BACKEND_URL = "http://127.0.0.1:8787";
-const HERO_LEVEL_CAP = 60;
+import { authUserFromSession, loadAuthSession, persistAuthSession } from "./auth/session.js";
+import { HERO_LEVEL_CAP, LOCAL_BACKEND_URL, createDefaultAccountState, createDefaultBackendState, createDefaultGuildState, createPlayerId } from "./game-state/index.js";
+import { cloudProviderReady as isCloudProviderReady, loadCloudConfiguration, requestBackend, requestSupabaseAuth, requestSupabaseRest } from "./networking/network-client.js";
+import { readStoredGame, removeStoredGame, writeStoredGame } from "./storage/index.js";
+
 let contentSource = "defaults";
 let cloudConfig = {
   provider: "local",
@@ -901,7 +902,7 @@ let projectedBuildings = [];
 function createInitialState() {
   const today = todayKey();
   return {
-    playerId: `player-${Math.random().toString(16).slice(2, 10)}`,
+    playerId: createPlayerId(),
     resources: { gold: 420, food: 360, stone: 260, wood: 260, energy: 60, gems: 120, guildCoins: 0 },
     buildings: Object.fromEntries(BUILDINGS.map((building) => [building.id, building.id === "castle" ? 1 : 0])),
     units: Object.fromEntries(UNITS.map((unit) => [unit.id, 0])),
@@ -922,20 +923,7 @@ function createInitialState() {
     inbox: [
       { id: `welcome-${today}`, title: "Bienvenue dans Heliora", body: "Pack de depart disponible.", reward: { gold: 180, food: 160, gems: 20 }, claimed: false },
     ],
-    guild: {
-      id: "",
-      name: "Aube d'Heliora",
-      tag: "HDH",
-      rank: "R3",
-      role: "member",
-      helps: 3,
-      rallyReadyAt: 0,
-      score: 320,
-      lastResetDate: today,
-      cloudMembers: [],
-      invites: [],
-      leaderboard: [],
-    },
+    guild: createDefaultGuildState(today),
     chat: [
       { from: "Ariane", text: "Bienvenue. Lance une aide de guilde avant les gros timers." },
       { from: "Bastian", text: "Rally pret sur les elites de la carte." },
@@ -966,31 +954,21 @@ function createInitialState() {
     claimedQuests: [],
     victories: 0,
     onboardingStep: 0,
-    backend: {
-      mode: "local",
-      cloudSyncAt: 0,
-      status: "Sauvegarde locale",
-    },
-    account: {
-      provider: "local",
-      userId: "",
-      email: "",
-      connectedAt: 0,
-    },
+    backend: createDefaultBackendState(),
+    account: createDefaultAccountState(),
     lastTick: Date.now(),
     log: ["Le royaume d'Heliora s'eveille."],
   };
 }
 
 function loadGame() {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = readStoredGame();
   if (!saved) {
     return createInitialState();
   }
 
   try {
-    const parsed = JSON.parse(saved);
-    return migrateState(parsed);
+    return migrateState(saved);
   } catch {
     return createInitialState();
   }
@@ -1056,7 +1034,7 @@ function migrateState(saved) {
 }
 
 function saveGame(showMessage = false) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, lastTick: Date.now() }));
+  writeStoredGame({ ...state, lastTick: Date.now() });
   if (showMessage) {
     showToast("Sauvegarde effectuee.");
   }
@@ -1617,51 +1595,15 @@ function refreshWorldNodes(now = Date.now()) {
 }
 
 async function callBackend(path, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1600);
-  try {
-    const baseUrl = cloudConfig.apiBaseUrl || LOCAL_BACKEND_URL;
-    const response = await fetch(`${baseUrl}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+  return requestBackend(cloudConfig, path, options);
 }
 
 async function loadCloudConfig() {
-  try {
-    const response = await fetch("./data/cloud-config.json", { cache: "no-store" });
-    if (!response.ok) {
-      return;
-    }
-    const config = await response.json();
-    cloudConfig = {
-      ...cloudConfig,
-      ...config,
-      apiBaseUrl: (config.apiBaseUrl || cloudConfig.apiBaseUrl || LOCAL_BACKEND_URL).replace(/\/$/, ""),
-      supabaseUrl: (config.supabaseUrl || "").replace(/\/$/, ""),
-      supabaseAnonKey: config.supabaseAnonKey || "",
-    };
-  } catch {
-    cloudConfig = { ...cloudConfig, provider: "local" };
-  }
+  cloudConfig = await loadCloudConfiguration(cloudConfig);
 }
 
 function cloudProviderReady() {
-  if (cloudConfig.provider === "supabase") {
-    return Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
-  }
-  return Boolean(cloudConfig.apiBaseUrl);
+  return isCloudProviderReady(cloudConfig);
 }
 
 function supabaseAuthReady() {
@@ -1673,50 +1615,19 @@ function authToken() {
 }
 
 function saveSupabaseSession(session) {
-  supabaseSession = session?.access_token ? session : null;
-  if (supabaseSession) {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(supabaseSession));
-    return;
-  }
-  localStorage.removeItem(AUTH_STORAGE_KEY);
+  supabaseSession = persistAuthSession(session);
 }
 
 function loadStoredSupabaseSession() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || "null");
-    if (stored?.access_token) {
-      supabaseSession = stored;
-    }
-  } catch {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-  }
+  supabaseSession = loadAuthSession();
 }
 
 function authUser() {
-  return supabaseSession?.user ?? null;
+  return authUserFromSession(supabaseSession);
 }
 
 async function supabaseAuthRequest(path, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
-  try {
-    const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        apikey: cloudConfig.supabaseAnonKey,
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
-    });
-    const payload = response.status === 204 ? null : await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(payload?.error_description || payload?.msg || payload?.message || `Supabase Auth HTTP ${response.status}`);
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return requestSupabaseAuth(cloudConfig, path, options);
 }
 
 async function refreshSupabaseSession() {
@@ -1757,30 +1668,11 @@ async function ensureSupabaseSession() {
 
 async function supabaseRequest(path, options = {}) {
   const { authenticated = false, ...requestOptions } = options;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6000);
-  try {
-    const token = authenticated ? authToken() : cloudConfig.supabaseAnonKey;
-    const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
-      ...requestOptions,
-      signal: controller.signal,
-      headers: {
-        apikey: cloudConfig.supabaseAnonKey,
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...(requestOptions.headers ?? {}),
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`Supabase HTTP ${response.status}`);
-    }
-    if (response.status === 204) {
-      return null;
-    }
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+  return requestSupabaseRest(cloudConfig, path, {
+    ...requestOptions,
+    authenticated,
+    accessToken: authToken(),
+  });
 }
 
 function mapLeaderboardRows(rows = []) {
@@ -2043,7 +1935,7 @@ async function signOutSupabase() {
     }
   }
   saveSupabaseSession(null);
-  state.account = { provider: "local", userId: "", email: "", connectedAt: 0 };
+  state.account = createDefaultAccountState();
   state.backend = { ...state.backend, mode: "local", status: "Session deconnectee, sauvegarde locale active" };
   saveGame(false);
   showToast("Compte deconnecte.");
@@ -2061,7 +1953,7 @@ async function initializeAuthState() {
   const valid = await ensureSupabaseSession();
   const user = authUser();
   if (!valid || !user?.id) {
-    state.account = { provider: "local", userId: "", email: "", connectedAt: 0 };
+    state.account = createDefaultAccountState();
     saveGame(false);
     return;
   }
@@ -7427,7 +7319,7 @@ elements.resetBtn.addEventListener("click", () => {
   if (!confirm("Recommencer le royaume depuis le debut ?")) {
     return;
   }
-  localStorage.removeItem(STORAGE_KEY);
+  removeStoredGame();
   state = createInitialState();
   selectedBuilding = "castle";
   selectedNode = WORLD_NODES[0].id;
