@@ -1,4 +1,5 @@
 const STORAGE_KEY = "heliora-web-kingdom-v1";
+const AUTH_STORAGE_KEY = "heliora-supabase-session-v1";
 const LOCAL_BACKEND_URL = "http://127.0.0.1:8787";
 const HERO_LEVEL_CAP = 60;
 let contentSource = "defaults";
@@ -8,6 +9,7 @@ let cloudConfig = {
   supabaseUrl: "",
   supabaseAnonKey: "",
 };
+let supabaseSession = null;
 
 const RESOURCE_LABELS = {
   gold: "Or",
@@ -872,6 +874,7 @@ const elements = {
   logList: $("#logList"),
   reportCenter: $("#reportCenter"),
   reportInsights: $("#reportInsights"),
+  authPanel: $("#authPanel"),
   installAppBtn: $("#installAppBtn"),
   syncBtn: $("#syncBtn"),
   saveBtn: $("#saveBtn"),
@@ -962,6 +965,12 @@ function createInitialState() {
       cloudSyncAt: 0,
       status: "Sauvegarde locale",
     },
+    account: {
+      provider: "local",
+      userId: "",
+      email: "",
+      connectedAt: 0,
+    },
     lastTick: Date.now(),
     log: ["Le royaume d'Heliora s'eveille."],
   };
@@ -1035,6 +1044,7 @@ function migrateState(saved) {
     marches: saved.marches ?? [],
     onboardingStep: saved.onboardingStep ?? fresh.onboardingStep,
     backend: { ...fresh.backend, ...saved.backend, cloudSyncAt: saved.cloudSyncAt ?? saved.backend?.cloudSyncAt ?? fresh.backend.cloudSyncAt },
+    account: { ...fresh.account, ...saved.account },
     log: saved.log?.slice(0, 8) ?? fresh.log,
   };
 }
@@ -1140,6 +1150,16 @@ function formatCosts(costs, multiplier = 1) {
   return Object.entries(costs)
     .map(([resource, amount]) => `<span class="pill">${RESOURCE_LABELS[resource]} ${formatNumber(amount * multiplier)}</span>`)
     .join("");
+}
+
+function escapeHtml(value = "") {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[char]));
 }
 
 function todayKey() {
@@ -1638,18 +1658,111 @@ function cloudProviderReady() {
   return Boolean(cloudConfig.apiBaseUrl);
 }
 
-async function supabaseRequest(path, options = {}) {
+function supabaseAuthReady() {
+  return cloudConfig.provider === "supabase" && cloudProviderReady();
+}
+
+function authToken() {
+  return supabaseSession?.access_token || "";
+}
+
+function saveSupabaseSession(session) {
+  supabaseSession = session?.access_token ? session : null;
+  if (supabaseSession) {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(supabaseSession));
+    return;
+  }
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function loadStoredSupabaseSession() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || "null");
+    if (stored?.access_token) {
+      supabaseSession = stored;
+    }
+  } catch {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+  }
+}
+
+function authUser() {
+  return supabaseSession?.user ?? null;
+}
+
+async function supabaseAuthRequest(path, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6000);
+  const timeout = setTimeout(() => controller.abort(), 7000);
   try {
     const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {
         apikey: cloudConfig.supabaseAnonKey,
-        Authorization: `Bearer ${cloudConfig.supabaseAnonKey}`,
         "Content-Type": "application/json",
         ...(options.headers ?? {}),
+      },
+    });
+    const payload = response.status === 204 ? null : await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error_description || payload?.msg || payload?.message || `Supabase Auth HTTP ${response.status}`);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function refreshSupabaseSession() {
+  if (!supabaseAuthReady() || !supabaseSession?.refresh_token) {
+    return false;
+  }
+  try {
+    const payload = await supabaseAuthRequest("/auth/v1/token?grant_type=refresh_token", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: supabaseSession.refresh_token }),
+    });
+    if (payload?.access_token) {
+      saveSupabaseSession(payload);
+      return true;
+    }
+  } catch {
+    saveSupabaseSession(null);
+  }
+  return false;
+}
+
+async function ensureSupabaseSession() {
+  if (!supabaseAuthReady()) {
+    return false;
+  }
+  if (!supabaseSession?.access_token) {
+    loadStoredSupabaseSession();
+  }
+  if (!supabaseSession?.access_token) {
+    return false;
+  }
+  const expiresAt = (supabaseSession.expires_at ?? 0) * 1000;
+  if (expiresAt && expiresAt - Date.now() < 60000) {
+    return refreshSupabaseSession();
+  }
+  return true;
+}
+
+async function supabaseRequest(path, options = {}) {
+  const { authenticated = false, ...requestOptions } = options;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+  try {
+    const token = authenticated ? authToken() : cloudConfig.supabaseAnonKey;
+    const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        apikey: cloudConfig.supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...(requestOptions.headers ?? {}),
       },
     });
     if (!response.ok) {
@@ -1682,26 +1795,45 @@ function mapChatRows(rows = []) {
 }
 
 async function syncSupabase(payload) {
+  if (!await ensureSupabaseSession()) {
+    throw new Error("Connexion Supabase requise");
+  }
+  const user = authUser();
+  if (!user?.id) {
+    throw new Error("Session Supabase invalide");
+  }
   const playerName = payload.state?.guild?.name ? `${payload.state.guild.name} Cmd` : "Commandant";
-  await supabaseRequest("/rest/v1/heliora_players?on_conflict=player_id", {
+  const saveState = {
+    ...payload.state,
+    account: {
+      provider: "supabase",
+      userId: user.id,
+      email: user.email ?? "",
+      connectedAt: payload.state?.account?.connectedAt || Date.now(),
+    },
+  };
+  await supabaseRequest("/rest/v1/heliora_players?on_conflict=user_id", {
     method: "POST",
+    authenticated: true,
     headers: { Prefer: "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({
+      user_id: user.id,
       player_id: payload.playerId,
       name: playerName,
       guild_tag: payload.guild?.name?.slice(0, 3).toUpperCase() ?? "HDH",
       guild: payload.guild,
       kingdom_power: payload.kingdomPower,
       resources: payload.resources,
-      save_state: payload.state,
+      save_state: saveState,
+      save_version: 2,
       synced_at: new Date().toISOString(),
     }),
   });
 
-  const leaderboardRows = await supabaseRequest("/rest/v1/heliora_players?select=player_id,name,guild_tag,guild,kingdom_power&order=kingdom_power.desc&limit=10");
+  const leaderboardRows = await supabaseRequest("/rest/v1/heliora_leaderboard?select=player_id,name,guild_tag,guild,kingdom_power&order=kingdom_power.desc&limit=10", { authenticated: true });
   let chatRows = [];
   try {
-    chatRows = await supabaseRequest("/rest/v1/heliora_chat?select=from_name,message,kind,created_at&order=created_at.desc&limit=20");
+    chatRows = await supabaseRequest("/rest/v1/heliora_chat?select=from_name,message,kind,created_at&order=created_at.desc&limit=20", { authenticated: true });
   } catch {
     chatRows = [];
   }
@@ -1712,6 +1844,115 @@ async function syncSupabase(payload) {
     leaderboard: mapLeaderboardRows(leaderboardRows),
     chat: mapChatRows(chatRows),
   };
+}
+
+async function loadSupabaseSave() {
+  if (!await ensureSupabaseSession()) {
+    return null;
+  }
+  const rows = await supabaseRequest("/rest/v1/heliora_players?select=save_state,synced_at&limit=1", { authenticated: true });
+  const saveState = rows?.[0]?.save_state;
+  return saveState ? migrateState(saveState) : null;
+}
+
+async function signInSupabase(email, password) {
+  const payload = await supabaseAuthRequest("/auth/v1/token?grant_type=password", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  saveSupabaseSession(payload);
+  const user = authUser();
+  state.account = {
+    provider: "supabase",
+    userId: user?.id ?? "",
+    email: user?.email ?? email,
+    connectedAt: Date.now(),
+  };
+  const cloudState = await loadSupabaseSave();
+  if (cloudState) {
+    const localPower = kingdomPower(state);
+    const cloudPower = kingdomPower(cloudState);
+    if (cloudPower >= localPower || confirm("Une sauvegarde cloud existe. Charger cette progression ?")) {
+      state = {
+        ...cloudState,
+        account: state.account,
+        backend: { mode: "supabase", cloudSyncAt: Date.now(), status: "Compte Supabase connecte" },
+      };
+    }
+  }
+  saveGame(false);
+  showReward("Compte joueur connecte.");
+  await cloudSync();
+}
+
+async function signUpSupabase(email, password) {
+  const payload = await supabaseAuthRequest("/auth/v1/signup", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  if (payload?.access_token) {
+    saveSupabaseSession(payload);
+    const user = authUser();
+    state.account = {
+      provider: "supabase",
+      userId: user?.id ?? "",
+      email: user?.email ?? email,
+      connectedAt: Date.now(),
+    };
+    saveGame(false);
+    await cloudSync();
+    showReward("Compte cree et sauvegarde cloud activee.");
+    return;
+  }
+  showToast("Compte cree. Verifie ton email puis connecte-toi.");
+}
+
+async function signOutSupabase() {
+  if (supabaseSession?.access_token && supabaseAuthReady()) {
+    try {
+      await supabaseAuthRequest("/auth/v1/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${supabaseSession.access_token}` },
+      });
+    } catch {
+      // La session locale est nettoyee meme si Supabase ne repond pas.
+    }
+  }
+  saveSupabaseSession(null);
+  state.account = { provider: "local", userId: "", email: "", connectedAt: 0 };
+  state.backend = { ...state.backend, mode: "local", status: "Session deconnectee, sauvegarde locale active" };
+  saveGame(false);
+  showToast("Compte deconnecte.");
+  render();
+}
+
+async function initializeAuthState() {
+  if (!supabaseAuthReady()) {
+    return;
+  }
+  loadStoredSupabaseSession();
+  if (!supabaseSession?.access_token) {
+    return;
+  }
+  const valid = await ensureSupabaseSession();
+  const user = authUser();
+  if (!valid || !user?.id) {
+    state.account = { provider: "local", userId: "", email: "", connectedAt: 0 };
+    saveGame(false);
+    return;
+  }
+  state.account = {
+    provider: "supabase",
+    userId: user.id,
+    email: user.email ?? "",
+    connectedAt: state.account?.connectedAt || Date.now(),
+  };
+  state.backend = {
+    ...state.backend,
+    mode: "supabase",
+    status: "Compte Supabase connecte",
+  };
+  saveGame(false);
 }
 
 async function loadContentPack() {
@@ -2096,6 +2337,17 @@ function prepareRally() {
 }
 
 async function cloudSync() {
+  if (cloudConfig.provider === "supabase" && cloudProviderReady() && !await ensureSupabaseSession()) {
+    state.backend = {
+      mode: "local",
+      cloudSyncAt: Date.now(),
+      status: "Connexion joueur requise",
+    };
+    showToast("Connecte ton compte joueur avant la sauvegarde cloud.");
+    render();
+    return;
+  }
+
   const payload = {
     playerId: state.playerId,
     kingdomPower: kingdomPower(),
@@ -3781,6 +4033,7 @@ function showRewardBurst(title, reward = {}, heroes = "", rareReward = {}) {
 
 function render() {
   renderTopHud();
+  renderAuthPanel();
   renderNavigation();
   renderLiveOpsBar();
   renderOnboarding();
@@ -3828,6 +4081,128 @@ function renderLiveOpsBar() {
     </article>
   `;
   elements.liveOpsBar.querySelector("[data-jump]")?.addEventListener("click", () => switchView("events"));
+}
+
+function renderAuthPanel() {
+  if (!elements.authPanel) {
+    return;
+  }
+
+  if (cloudConfig.provider !== "supabase") {
+    elements.authPanel.innerHTML = `
+      <article class="auth-card local">
+        <div>
+          <span class="eyebrow">Compte joueur</span>
+          <strong>Sauvegarde locale active</strong>
+          <p>Renseigne Supabase dans data/cloud-config.json pour activer les comptes cloud securises.</p>
+        </div>
+        <span class="auth-status">Local</span>
+      </article>
+    `;
+    return;
+  }
+
+  if (!cloudProviderReady()) {
+    elements.authPanel.innerHTML = `
+      <article class="auth-card warning">
+        <div>
+          <span class="eyebrow">Supabase Auth</span>
+          <strong>Configuration manquante</strong>
+          <p>Ajoute Project URL et anon public key dans data/cloud-config.json.</p>
+        </div>
+        <span class="auth-status">A configurer</span>
+      </article>
+    `;
+    return;
+  }
+
+  const user = authUser();
+  if (user?.id) {
+    elements.authPanel.innerHTML = `
+      <article class="auth-card connected">
+        <div>
+          <span class="eyebrow">Compte joueur</span>
+          <strong>${escapeHtml(user.email ?? state.account.email ?? "Joueur connecte")}</strong>
+          <p>Sauvegarde cloud protegee par RLS. ID joueur: ${escapeHtml(String(user.id).slice(0, 8))}...</p>
+        </div>
+        <div class="auth-actions">
+          <button class="mini-button" type="button" data-auth-sync>Sauvegarder cloud</button>
+          <button class="mini-button" type="button" data-auth-load>Charger cloud</button>
+          <button class="mini-button" type="button" data-auth-logout>Deconnexion</button>
+        </div>
+      </article>
+    `;
+    elements.authPanel.querySelector("[data-auth-sync]")?.addEventListener("click", cloudSync);
+    elements.authPanel.querySelector("[data-auth-load]")?.addEventListener("click", restoreCloudSave);
+    elements.authPanel.querySelector("[data-auth-logout]")?.addEventListener("click", signOutSupabase);
+    return;
+  }
+
+  elements.authPanel.innerHTML = `
+    <article class="auth-card">
+      <div>
+        <span class="eyebrow">Compte joueur</span>
+        <strong>Connexion cloud securisee</strong>
+        <p>Connecte-toi pour sauvegarder la progression, les heros, ressources et futurs classements.</p>
+      </div>
+      <form class="auth-form" data-auth-form>
+        <input type="email" name="email" autocomplete="email" placeholder="Email joueur" required />
+        <input type="password" name="password" autocomplete="current-password" placeholder="Mot de passe" minlength="6" required />
+        <button class="mini-button" type="submit" data-auth-mode="signin">Connexion</button>
+        <button class="mini-button" type="submit" data-auth-mode="signup">Creer</button>
+      </form>
+    </article>
+  `;
+  elements.authPanel.querySelector("[data-auth-form]")?.addEventListener("submit", handleAuthSubmit);
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  const submitter = event.submitter;
+  const formData = new FormData(event.currentTarget);
+  const email = String(formData.get("email") || "").trim();
+  const password = String(formData.get("password") || "");
+  if (!email || password.length < 6) {
+    showToast("Email et mot de passe de 6 caracteres minimum.");
+    return;
+  }
+
+  try {
+    if (submitter?.dataset.authMode === "signup") {
+      await signUpSupabase(email, password);
+    } else {
+      await signInSupabase(email, password);
+    }
+  } catch (error) {
+    showToast(error.message || "Connexion impossible pour le moment.");
+  } finally {
+    render();
+  }
+}
+
+async function restoreCloudSave() {
+  try {
+    const cloudState = await loadSupabaseSave();
+    if (!cloudState) {
+      showToast("Aucune sauvegarde cloud trouvee.");
+      return;
+    }
+    state = {
+      ...cloudState,
+      account: {
+        provider: "supabase",
+        userId: authUser()?.id ?? "",
+        email: authUser()?.email ?? "",
+        connectedAt: Date.now(),
+      },
+      backend: { mode: "supabase", cloudSyncAt: Date.now(), status: "Sauvegarde cloud chargee" },
+    };
+    saveGame(false);
+    showReward("Sauvegarde cloud chargee.");
+    render();
+  } catch {
+    showToast("Impossible de charger la sauvegarde cloud.");
+  }
 }
 
 function renderOnboarding() {
@@ -6669,6 +7044,7 @@ await loadContentPack();
 state = loadGame();
 selectedNode = getNode(selectedNode)?.id ?? WORLD_NODES[0].id;
 selectedBuilding = getBuilding(selectedBuilding)?.id ?? "castle";
+await initializeAuthState();
 applyOfflineProgress();
 setupPwaInstall();
 setupKingdomCanvas();

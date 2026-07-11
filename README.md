@@ -38,12 +38,12 @@ Puis cliquer sur `Cloud sync` dans le jeu.
 
 Le jeu est une PWA. Depuis le lien public GitHub Pages, ouvrir le jeu dans Chrome/Edge mobile ou desktop, puis utiliser le bouton `Installer l'app` quand il apparait.
 
-## Brancher Supabase cloud
+## Brancher Supabase Auth et cloud
 
-Le jeu peut synchroniser sauvegardes, guildes, chat et classement avec Supabase.
+Le jeu peut synchroniser les sauvegardes par compte joueur, le chat et le classement avec Supabase.
 
 1. Creer un projet Supabase.
-2. Ouvrir le SQL Editor Supabase.
+2. Activer Auth dans Supabase avec Email/password.
 3. Executer le contenu de `data/supabase-schema.sql`.
 4. Copier `Project URL` et `anon public key`.
 5. Modifier `data/cloud-config.json` :
@@ -58,6 +58,13 @@ Le jeu peut synchroniser sauvegardes, guildes, chat et classement avec Supabase.
 ```
 
 La cle `anon public` Supabase est faite pour le client web. Ne jamais mettre de cle `service_role` dans ce depot.
+
+Le schema active RLS:
+
+- chaque joueur lit et modifie uniquement sa propre ligne `heliora_players` via `auth.uid()`;
+- la sauvegarde complete reste privee;
+- le classement passe par la vue limitee `heliora_leaderboard`;
+- le chat est reserve aux joueurs authentifies.
 
 ## Publier sur GitHub
 
