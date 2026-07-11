@@ -2002,10 +2002,18 @@ async function signInSupabase(email, password) {
 }
 
 async function signUpSupabase(email, password) {
-  const payload = await supabaseAuthRequest("/auth/v1/signup", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
+  let payload;
+  try {
+    payload = await supabaseAuthRequest("/auth/v1/signup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  } catch (error) {
+    if (String(error.message || "").toLowerCase().includes("signup")) {
+      throw new Error("Creation de compte desactivee dans Supabase: active Email signups dans Authentication > Providers > Email.");
+    }
+    throw error;
+  }
   if (payload?.access_token) {
     saveSupabaseSession(payload);
     const user = authUser();
