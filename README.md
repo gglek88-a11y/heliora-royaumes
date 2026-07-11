@@ -65,6 +65,11 @@ Le schema active RLS:
 - la sauvegarde complete reste privee;
 - le classement passe par la vue limitee `heliora_leaderboard`;
 - le chat est reserve aux joueurs authentifies.
+- les guildes reelles utilisent `heliora_guilds`, `heliora_guild_members` et `heliora_guild_invites`;
+- seuls les chefs/officiers peuvent gerer invitations et promotions;
+- le classement d'alliance passe par `heliora_guild_leaderboard`.
+
+Apres modification de `data/cloud-config.json`, pousser le depot sur GitHub pour que GitHub Pages prenne la nouvelle configuration.
 
 ## Publier sur GitHub
 

@@ -923,12 +923,18 @@ function createInitialState() {
       { id: `welcome-${today}`, title: "Bienvenue dans Heliora", body: "Pack de depart disponible.", reward: { gold: 180, food: 160, gems: 20 }, claimed: false },
     ],
     guild: {
+      id: "",
       name: "Aube d'Heliora",
+      tag: "HDH",
       rank: "R3",
+      role: "member",
       helps: 3,
       rallyReadyAt: 0,
       score: 320,
       lastResetDate: today,
+      cloudMembers: [],
+      invites: [],
+      leaderboard: [],
     },
     chat: [
       { from: "Ariane", text: "Bienvenue. Lance une aide de guilde avant les gros timers." },
@@ -1794,6 +1800,108 @@ function mapChatRows(rows = []) {
   }));
 }
 
+function supabaseEq(value) {
+  return encodeURIComponent(String(value ?? ""));
+}
+
+function playerDisplayName() {
+  return authUser()?.email?.split("@")[0] || state.account?.email?.split("@")[0] || "Commandant";
+}
+
+function guildTagFromName(name = "") {
+  const letters = String(name)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z]/g, "")
+    .toUpperCase()
+    .slice(0, 3);
+  return letters.padEnd(3, "H") || "HDH";
+}
+
+function mapGuildRows(rows = []) {
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name ?? "Alliance",
+    tag: row.tag ?? "HDH",
+    score: row.score ?? 0,
+    power: row.power ?? 0,
+    memberCount: row.member_count ?? 0,
+    isOpen: row.is_open ?? true,
+  }));
+}
+
+function mapGuildMembers(rows = []) {
+  return rows.map((row) => ({
+    userId: row.user_id,
+    playerId: row.player_id,
+    name: row.name ?? "Commandant",
+    rank: ({ leader: "R5", officer: "R4", member: "R3", recruit: "R1" })[row.role] ?? "R1",
+    role: row.role ?? "recruit",
+    power: row.kingdom_power ?? 0,
+    contribution: row.contribution ?? 0,
+    status: row.role === "leader" ? "Chef de guilde" : row.role === "officer" ? "Officier" : "Membre actif",
+  }));
+}
+
+async function syncCloudGuildData() {
+  if (!await ensureSupabaseSession()) {
+    return null;
+  }
+
+  const guildRows = await supabaseRequest("/rest/v1/heliora_guilds?select=id,name,tag,score,power,member_count,is_open&order=power.desc&limit=20", { authenticated: true });
+  const guildLeaderboard = mapGuildRows(guildRows);
+  state.guild.leaderboard = guildLeaderboard;
+
+  if (!state.guild.id) {
+    const ownRows = await supabaseRequest(`/rest/v1/heliora_guild_members?select=guild_id,role,heliora_guilds(id,name,tag,score,power,member_count,is_open)&user_id=eq.${supabaseEq(authUser()?.id)}&limit=1`, { authenticated: true });
+    const ownGuild = ownRows?.[0]?.heliora_guilds;
+    if (ownGuild?.id) {
+      state.guild = {
+        ...state.guild,
+        id: ownGuild.id,
+        name: ownGuild.name,
+        tag: ownGuild.tag,
+        role: ownRows[0].role ?? "member",
+        rank: ({ leader: "R5", officer: "R4", member: "R3", recruit: "R1" })[ownRows[0].role] ?? "R1",
+        score: ownGuild.score ?? state.guild.score,
+      };
+    }
+  }
+
+  if (state.guild.id) {
+    const memberRows = await supabaseRequest(`/rest/v1/heliora_guild_members?select=user_id,player_id,name,role,kingdom_power,contribution,joined_at&guild_id=eq.${supabaseEq(state.guild.id)}&order=kingdom_power.desc`, { authenticated: true });
+    state.guild.cloudMembers = mapGuildMembers(memberRows);
+    const inviteRows = await supabaseRequest(`/rest/v1/heliora_guild_invites?select=id,invited_email,status,created_at&guild_id=eq.${supabaseEq(state.guild.id)}&status=eq.pending&order=created_at.desc&limit=6`, { authenticated: true }).catch(() => []);
+    state.guild.invites = inviteRows ?? [];
+  }
+
+  return state.guild;
+}
+
+async function upsertCloudGuildMember(role = state.guild.role || "member") {
+  if (!await ensureSupabaseSession()) {
+    throw new Error("Connexion joueur requise");
+  }
+  const user = authUser();
+  if (!user?.id || !state.guild.id) {
+    throw new Error("Guilde cloud introuvable");
+  }
+  await supabaseRequest("/rest/v1/heliora_guild_members?on_conflict=guild_id,user_id", {
+    method: "POST",
+    authenticated: true,
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify({
+      guild_id: state.guild.id,
+      user_id: user.id,
+      player_id: state.playerId,
+      name: playerDisplayName(),
+      role,
+      kingdom_power: kingdomPower(),
+      contribution: state.guild.score ?? 0,
+    }),
+  });
+}
+
 async function syncSupabase(payload) {
   if (!await ensureSupabaseSession()) {
     throw new Error("Connexion Supabase requise");
@@ -1820,7 +1928,7 @@ async function syncSupabase(payload) {
       user_id: user.id,
       player_id: payload.playerId,
       name: playerName,
-      guild_tag: payload.guild?.name?.slice(0, 3).toUpperCase() ?? "HDH",
+      guild_tag: payload.guild?.tag ?? payload.guild?.name?.slice(0, 3).toUpperCase() ?? "HDH",
       guild: payload.guild,
       kingdom_power: payload.kingdomPower,
       resources: payload.resources,
@@ -1836,6 +1944,14 @@ async function syncSupabase(payload) {
     chatRows = await supabaseRequest("/rest/v1/heliora_chat?select=from_name,message,kind,created_at&order=created_at.desc&limit=20", { authenticated: true });
   } catch {
     chatRows = [];
+  }
+  try {
+    if (state.guild.id) {
+      await upsertCloudGuildMember();
+    }
+    await syncCloudGuildData();
+  } catch {
+    // La sauvegarde joueur reste prioritaire si la couche guilde cloud est indisponible.
   }
 
   return {
@@ -1952,6 +2068,11 @@ async function initializeAuthState() {
     mode: "supabase",
     status: "Compte Supabase connecte",
   };
+  try {
+    await syncCloudGuildData();
+  } catch {
+    // Le compte reste utilisable meme si la liste des guildes ne charge pas au demarrage.
+  }
   saveGame(false);
 }
 
@@ -2308,6 +2429,203 @@ function craftArtifact(id) {
   state.artifacts.push(id);
   awardEventPoints(150);
   showReward(`${item.name} forge.`);
+  render();
+}
+
+function guildRoleRank(role) {
+  return ({ leader: "R5", officer: "R4", member: "R3", recruit: "R1" })[role] ?? "R1";
+}
+
+function canManageGuild() {
+  return ["leader", "officer"].includes(state.guild.role);
+}
+
+async function ensureCloudGuildAction() {
+  if (cloudConfig.provider !== "supabase" || !cloudProviderReady()) {
+    showToast("Configure Supabase pour activer les guildes reelles.");
+    return false;
+  }
+  if (!await ensureSupabaseSession()) {
+    showToast("Connecte ton compte joueur pour utiliser les guildes cloud.");
+    return false;
+  }
+  return true;
+}
+
+async function createCloudGuild(event) {
+  event.preventDefault();
+  if (!await ensureCloudGuildAction()) {
+    return;
+  }
+  const formData = new FormData(event.currentTarget);
+  const name = String(formData.get("guildName") || "").trim().slice(0, 42);
+  const tag = String(formData.get("guildTag") || guildTagFromName(name)).trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  if (name.length < 3 || tag.length < 2) {
+    showToast("Nom de guilde et tag trop courts.");
+    return;
+  }
+  try {
+    const user = authUser();
+    const rows = await supabaseRequest("/rest/v1/heliora_guilds", {
+      method: "POST",
+      authenticated: true,
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({
+        owner_user_id: user.id,
+        name,
+        tag,
+        description: "Alliance fondee depuis Heliora Royaumes.",
+        power: kingdomPower(),
+        score: state.guild.score ?? 0,
+        member_count: 1,
+        is_open: true,
+      }),
+    });
+    const guild = rows?.[0];
+    if (!guild?.id) {
+      throw new Error("Creation impossible");
+    }
+    state.guild = {
+      ...state.guild,
+      id: guild.id,
+      name: guild.name,
+      tag: guild.tag,
+      role: "leader",
+      rank: "R5",
+      score: guild.score ?? state.guild.score,
+    };
+    await upsertCloudGuildMember("leader");
+    await syncCloudGuildData();
+    saveGame(false);
+    showReward(`Guilde ${guild.tag} creee.`);
+  } catch (error) {
+    showToast(error.message || "Creation de guilde impossible.");
+  }
+  render();
+}
+
+async function joinCloudGuild(guildId) {
+  if (!await ensureCloudGuildAction()) {
+    return;
+  }
+  try {
+    const rows = await supabaseRequest(`/rest/v1/heliora_guilds?select=id,name,tag,score,is_open&id=eq.${supabaseEq(guildId)}&limit=1`, { authenticated: true });
+    const guild = rows?.[0];
+    if (!guild?.id || !guild.is_open) {
+      showToast("Cette guilde n'accepte pas les entrees libres.");
+      return;
+    }
+    state.guild = {
+      ...state.guild,
+      id: guild.id,
+      name: guild.name,
+      tag: guild.tag,
+      role: "member",
+      rank: "R3",
+      score: guild.score ?? state.guild.score,
+    };
+    await upsertCloudGuildMember("member");
+    await syncCloudGuildData();
+    await cloudSync();
+    showReward(`Tu as rejoint ${guild.name}.`);
+  } catch {
+    showToast("Impossible de rejoindre cette guilde.");
+  }
+  render();
+}
+
+async function inviteCloudGuildMember(event) {
+  event.preventDefault();
+  if (!await ensureCloudGuildAction() || !state.guild.id || !canManageGuild()) {
+    showToast("Seuls les chefs/officiers peuvent inviter.");
+    return;
+  }
+  const formData = new FormData(event.currentTarget);
+  const email = String(formData.get("inviteEmail") || "").trim().toLowerCase();
+  if (!email.includes("@")) {
+    showToast("Email invalide.");
+    return;
+  }
+  try {
+    await supabaseRequest("/rest/v1/heliora_guild_invites", {
+      method: "POST",
+      authenticated: true,
+      body: JSON.stringify({
+        guild_id: state.guild.id,
+        invited_email: email,
+        created_by: authUser().id,
+        status: "pending",
+      }),
+    });
+    await syncCloudGuildData();
+    showReward("Invitation envoyee.");
+  } catch {
+    showToast("Invitation impossible pour le moment.");
+  }
+  render();
+}
+
+async function promoteCloudGuildMember(userId) {
+  if (!await ensureCloudGuildAction() || state.guild.role !== "leader") {
+    showToast("Seul le chef peut promouvoir.");
+    return;
+  }
+  try {
+    await supabaseRequest(`/rest/v1/heliora_guild_members?guild_id=eq.${supabaseEq(state.guild.id)}&user_id=eq.${supabaseEq(userId)}`, {
+      method: "PATCH",
+      authenticated: true,
+      body: JSON.stringify({ role: "officer" }),
+    });
+    await syncCloudGuildData();
+    showReward("Membre promu officier.");
+  } catch {
+    showToast("Promotion impossible.");
+  }
+  render();
+}
+
+async function leaveCloudGuild() {
+  if (!await ensureCloudGuildAction() || !state.guild.id) {
+    return;
+  }
+  if (state.guild.role === "leader" && (state.guild.cloudMembers?.length ?? 0) > 1) {
+    showToast("Transfere le commandement avant de quitter.");
+    return;
+  }
+  try {
+    await supabaseRequest(`/rest/v1/heliora_guild_members?guild_id=eq.${supabaseEq(state.guild.id)}&user_id=eq.${supabaseEq(authUser().id)}`, {
+      method: "DELETE",
+      authenticated: true,
+    });
+    state.guild = {
+      ...state.guild,
+      id: "",
+      name: "Sans alliance",
+      tag: "SOLO",
+      role: "recruit",
+      rank: "R1",
+      cloudMembers: [],
+      invites: [],
+    };
+    await cloudSync();
+    showToast("Tu as quitte la guilde.");
+  } catch {
+    showToast("Impossible de quitter la guilde.");
+  }
+  render();
+}
+
+async function refreshCloudGuilds() {
+  if (!await ensureCloudGuildAction()) {
+    return;
+  }
+  try {
+    await syncCloudGuildData();
+    await cloudSync();
+    showToast("Guildes cloud actualisees.");
+  } catch {
+    showToast("Actualisation guilde impossible.");
+  }
   render();
 }
 
@@ -6541,48 +6859,110 @@ function marchProgress(march) {
 
 function renderAlliance() {
   const rallyActive = Date.now() < (state.guild.rallyReadyAt ?? 0);
+  const cloudReady = cloudConfig.provider === "supabase" && cloudProviderReady();
+  const connected = Boolean(authUser()?.id);
+  const cloudMembers = state.guild.cloudMembers?.length ? state.guild.cloudMembers : [];
+  const shownMembers = cloudMembers.length ? cloudMembers : GUILD_MEMBERS;
+  const guildRows = state.guild.leaderboard?.length ? state.guild.leaderboard : [];
   elements.guildPanel.innerHTML = `
     <article class="system-card">
       <div class="card-top">
         <div>
-          <h3>${state.guild.name}</h3>
-          <p class="muted">Rang ${state.guild.rank} - Score saison ${formatNumber(state.guild.score)}</p>
+          <span class="eyebrow">${state.guild.id ? "Guilde cloud" : "Alliance"}</span>
+          <h3>[${escapeHtml(state.guild.tag ?? "HDH")}] ${escapeHtml(state.guild.name)}</h3>
+          <p class="muted">Rang ${escapeHtml(state.guild.rank)} - Role ${escapeHtml(state.guild.role ?? "member")} - Score saison ${formatNumber(state.guild.score)}</p>
         </div>
         <strong>${rallyActive ? formatTime(state.guild.rallyReadyAt - Date.now()) : "Rally ferme"}</strong>
+      </div>
+      <div class="guild-cloud-status ${cloudReady && connected ? "online" : ""}">
+        <span>${cloudReady ? "Supabase pret" : "Supabase non configure"}</span>
+        <span>${connected ? "Compte connecte" : "Connexion requise"}</span>
+        <span>${state.guild.id ? "Guilde reelle active" : "Mode local/simule"}</span>
       </div>
       <div class="guild-actions">
         <button class="primary" type="button" data-guild-help>Aide de guilde (${state.guild.helps})</button>
         <button class="mini-button" type="button" data-rally>Preparer rally</button>
+        <button class="mini-button" type="button" data-guild-refresh>Actualiser cloud</button>
+        ${state.guild.id ? `<button class="mini-button" type="button" data-guild-leave>Quitter</button>` : ""}
       </div>
+      ${!state.guild.id ? `
+        <form class="guild-form" data-guild-create>
+          <input type="text" name="guildName" placeholder="Nom de guilde" maxlength="42" required />
+          <input type="text" name="guildTag" placeholder="TAG" maxlength="4" />
+          <button class="mini-button" type="submit">Creer guilde</button>
+        </form>
+      ` : ""}
+      ${state.guild.id && canManageGuild() ? `
+        <form class="guild-form" data-guild-invite>
+          <input type="email" name="inviteEmail" placeholder="Email du joueur a inviter" required />
+          <button class="mini-button" type="submit">Inviter</button>
+        </form>
+      ` : ""}
       <div class="member-list">
-        ${GUILD_MEMBERS.map((member) => `
+        ${shownMembers.map((member) => `
           <div class="member-row">
-            <span><strong>${member.name}</strong><small>${member.rank} - ${member.status}</small></span>
+            <span><strong>${escapeHtml(member.name)}</strong><small>${escapeHtml(member.rank)} - ${escapeHtml(member.status)}${member.contribution ? ` - ${formatNumber(member.contribution)} pts` : ""}</small></span>
             <strong>${formatNumber(member.power)}</strong>
+            ${state.guild.role === "leader" && member.userId && member.userId !== authUser()?.id && member.role !== "officer" ? `<button class="mini-button" type="button" data-guild-promote="${escapeHtml(member.userId)}">R4</button>` : ""}
           </div>
         `).join("")}
       </div>
+      ${state.guild.invites?.length ? `
+        <div class="guild-invites">
+          <strong>Invitations en attente</strong>
+          ${state.guild.invites.map((invite) => `<span>${escapeHtml(invite.invited_email)} - ${escapeHtml(invite.status)}</span>`).join("")}
+        </div>
+      ` : ""}
+    </article>
+    <article class="system-card">
+      <h3>Guildes disponibles</h3>
+      ${guildRows.length ? guildRows.slice(0, 6).map((guild) => `
+        <div class="member-row">
+          <span><strong>[${escapeHtml(guild.tag)}] ${escapeHtml(guild.name)}</strong><small>${formatNumber(guild.memberCount)} membres - score ${formatNumber(guild.score)}</small></span>
+          <strong>${formatNumber(guild.power)}</strong>
+          ${guild.id !== state.guild.id && guild.isOpen ? `<button class="mini-button" type="button" data-guild-join="${escapeHtml(guild.id)}">Rejoindre</button>` : ""}
+        </div>
+      `).join("") : `<p class="muted">Connecte Supabase pour charger les guildes reelles du royaume.</p>`}
     </article>
   `;
   elements.guildPanel.querySelector("[data-guild-help]").addEventListener("click", requestGuildHelp);
   elements.guildPanel.querySelector("[data-rally]").addEventListener("click", prepareRally);
+  elements.guildPanel.querySelector("[data-guild-refresh]")?.addEventListener("click", refreshCloudGuilds);
+  elements.guildPanel.querySelector("[data-guild-leave]")?.addEventListener("click", leaveCloudGuild);
+  elements.guildPanel.querySelector("[data-guild-create]")?.addEventListener("submit", createCloudGuild);
+  elements.guildPanel.querySelector("[data-guild-invite]")?.addEventListener("submit", inviteCloudGuildMember);
+  elements.guildPanel.querySelectorAll("[data-guild-join]").forEach((button) => {
+    button.addEventListener("click", () => joinCloudGuild(button.dataset.guildJoin));
+  });
+  elements.guildPanel.querySelectorAll("[data-guild-promote]").forEach((button) => {
+    button.addEventListener("click", () => promoteCloudGuildMember(button.dataset.guildPromote));
+  });
 
   elements.chatPanel.innerHTML = `
     <div class="chat-list">
-      ${state.chat.map((message) => `<div class="chat-line ${message.kind === "report" ? "shared-report" : ""}"><strong>${message.from}</strong><span>${message.text}</span></div>`).join("")}
+      ${state.chat.map((message) => `<div class="chat-line ${message.kind === "report" ? "shared-report" : ""}"><strong>${escapeHtml(message.from)}</strong><span>${escapeHtml(message.text)}</span></div>`).join("")}
     </div>
   `;
-  const playerEntry = { name: "Toi", guild: "HDH", power: kingdomPower() + state.guild.score };
+  const playerEntry = { name: "Toi", guild: state.guild.tag ?? "HDH", power: kingdomPower() + state.guild.score };
   const rows = [...state.leaderboard, playerEntry].sort((a, b) => b.power - a.power).slice(0, 6);
   elements.leaderboardPanel.innerHTML = `
     <article class="system-card">
       <h3>Classement royaume</h3>
       ${rows.map((row, index) => `
         <div class="member-row ${row.name === "Toi" ? "highlight" : ""}">
-          <span><strong>#${index + 1} ${row.name}</strong><small>${row.guild}</small></span>
+          <span><strong>#${index + 1} ${escapeHtml(row.name)}</strong><small>${escapeHtml(row.guild)}</small></span>
           <strong>${formatNumber(row.power)}</strong>
         </div>
       `).join("")}
+    </article>
+    <article class="system-card">
+      <h3>Classement alliances</h3>
+      ${(state.guild.leaderboard ?? []).slice(0, 6).map((guild, index) => `
+        <div class="member-row ${guild.id === state.guild.id ? "highlight" : ""}">
+          <span><strong>#${index + 1} [${escapeHtml(guild.tag)}] ${escapeHtml(guild.name)}</strong><small>${formatNumber(guild.memberCount)} membres</small></span>
+          <strong>${formatNumber(guild.power)}</strong>
+        </div>
+      `).join("") || `<p class="muted">Classement cloud disponible apres connexion Supabase.</p>`}
     </article>
   `;
 }

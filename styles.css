@@ -2241,6 +2241,65 @@ button:focus-visible {
   margin: 0;
 }
 
+.guild-cloud-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.guild-cloud-status span,
+.guild-invites span {
+  border: 1px solid rgba(15, 111, 104, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 111, 104, 0.08);
+  color: #274447;
+  font-size: 0.74rem;
+  font-weight: 900;
+  padding: 6px 8px;
+}
+
+.guild-cloud-status.online span:first-child {
+  border-color: rgba(15, 111, 104, 0.42);
+  background: rgba(15, 111, 104, 0.18);
+  color: var(--jade-2);
+}
+
+.guild-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(70px, 0.35fr) auto;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.guild-form input {
+  min-height: 42px;
+  border: 1px solid rgba(15, 111, 104, 0.24);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 850;
+  padding: 9px 10px;
+}
+
+.guild-form input:focus {
+  border-color: rgba(15, 111, 104, 0.72);
+  box-shadow: 0 0 0 3px rgba(15, 111, 104, 0.14);
+  outline: none;
+}
+
+.guild-invites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.guild-invites strong {
+  flex-basis: 100%;
+}
+
 .event-card.active-event {
   border-color: rgba(242, 210, 121, 0.82);
   background:
@@ -5775,7 +5834,8 @@ button:focus-visible {
   }
 
   .auth-form,
-  .auth-actions {
+  .auth-actions,
+  .guild-form {
     justify-content: flex-start;
   }
 
@@ -5851,7 +5911,8 @@ button:focus-visible {
   }
 
   .auth-form,
-  .auth-actions {
+  .auth-actions,
+  .guild-form {
     display: grid;
     grid-template-columns: 1fr;
     width: 100%;
@@ -5859,7 +5920,9 @@ button:focus-visible {
 
   .auth-form input,
   .auth-form .mini-button,
-  .auth-actions .mini-button {
+  .auth-actions .mini-button,
+  .guild-form input,
+  .guild-form .mini-button {
     width: 100%;
   }
 
