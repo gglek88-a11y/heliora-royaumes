@@ -1,0 +1,17 @@
+{
+  "name": "heliora-royaumes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prototype web de strategie 4X fantasy pour Heliora Royaumes.",
+  "scripts": {
+    "build": "node scripts/build-pages.mjs",
+    "dev": "vite --host 127.0.0.1 --port 5176",
+    "dev:any": "vite --host 0.0.0.0 --port 5176",
+    "backend": "node server/mock-backend.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 4176"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}

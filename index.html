@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Heliora Royaumes</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Prototype web strategie</p>
+          <h1>Heliora Royaumes</h1>
+          <div id="kingdomSummary" class="kingdom-summary" aria-label="Resume du royaume"></div>
+        </div>
+        <div class="top-actions">
+          <button id="syncBtn" class="ghost" type="button">Cloud sync</button>
+          <button id="saveBtn" class="ghost" type="button">Sauvegarder</button>
+          <button id="resetBtn" class="ghost danger" type="button">Recommencer</button>
+        </div>
+      </header>
+
+      <section id="liveOpsBar" class="liveops-bar" aria-label="Evenement actif"></section>
+      <section id="resources" class="resources" aria-label="Ressources"></section>
+
+      <nav class="tabs" aria-label="Sections du jeu">
+        <button class="tab active" type="button" data-view="kingdom">Royaume</button>
+        <button class="tab" type="button" data-view="army">Armee</button>
+        <button class="tab" type="button" data-view="world">Carte</button>
+        <button class="tab" type="button" data-view="alliance">Alliance</button>
+        <button class="tab" type="button" data-view="events">Events</button>
+        <button class="tab" type="button" data-view="shop">Boutique</button>
+        <button class="tab" type="button" data-view="quests">Quetes</button>
+        <button class="tab" type="button" data-view="reports">Rapports</button>
+      </nav>
+
+      <main>
+        <section id="kingdom" class="view active">
+          <div class="kingdom-layout">
+            <section class="city-stage" aria-label="Citadelle">
+              <div class="skyline">
+                <div class="sun"></div>
+                <div class="mountain one"></div>
+                <div class="mountain two"></div>
+              </div>
+              <img class="citadel-concept" src="./citadel-redesign.png" alt="" aria-hidden="true" />
+              <canvas id="kingdomCanvas" class="kingdom-canvas" aria-label="Vue 3D du royaume"></canvas>
+              <div id="citadelInspector" class="citadel-inspector" aria-live="polite"></div>
+              <div id="citadelCompartments" class="citadel-compartments" aria-label="Compartiments interactifs de la citadelle"></div>
+              <div id="cityGrid" class="city-grid"></div>
+              <div id="quickActions" class="quick-actions" aria-label="Actions rapides"></div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Gestion</p>
+                <h2 id="selectedBuildingName">Batiment</h2>
+              </div>
+              <div id="buildingDetails"></div>
+              <div id="citadelOverview" class="citadel-overview"></div>
+              <div id="kingdomTrialPanel" class="kingdom-trial-panel"></div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="army" class="view">
+          <div class="split-grid">
+            <section class="panel wide army-panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Caserne</p>
+                <h2>Former des troupes</h2>
+              </div>
+              <div id="formationPanel" class="system-grid"></div>
+              <div id="trainingQueue" class="queue"></div>
+              <div id="unitList" class="unit-list"></div>
+            </section>
+
+            <section class="panel commanders-panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Commandants</p>
+                <h2>Heros</h2>
+              </div>
+              <div id="heroList" class="hero-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="world" class="view">
+          <div class="world-layout">
+            <section class="world-map" aria-label="Carte du monde">
+              <div class="map-grid" id="mapGrid"></div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Expedition</p>
+                <h2 id="selectedNodeName">Choisis une cible</h2>
+              </div>
+              <div id="nodeDetails"></div>
+              <div id="battleReport"></div>
+              <div id="marchList" class="march-list"></div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="alliance" class="view">
+          <div class="split-grid">
+            <section class="panel wide">
+              <div class="panel-heading">
+                <p class="eyebrow">Guilde simulee</p>
+                <h2>Alliance et rally</h2>
+              </div>
+              <div id="guildPanel"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Social</p>
+                <h2>Chat et classement</h2>
+              </div>
+              <div id="chatPanel"></div>
+              <div id="leaderboardPanel"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="events" class="view">
+          <div class="split-grid">
+            <section class="panel wide">
+              <div class="panel-heading">
+                <p class="eyebrow">Liveops</p>
+                <h2>Centre d'evenements</h2>
+              </div>
+              <div id="eventPanel"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Inbox</p>
+                <h2>Messages et cadeaux</h2>
+              </div>
+              <div id="inboxPanel"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="shop" class="view">
+          <div class="split-grid">
+            <section class="panel wide">
+              <div class="panel-heading">
+                <p class="eyebrow">Cosmetiques</p>
+                <h2>Boutique et skins</h2>
+              </div>
+              <div id="shopPanel"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Progression</p>
+                <h2>Recherches et artefacts</h2>
+              </div>
+              <div id="progressionPanel"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="quests" class="view">
+          <div class="split-grid">
+            <section class="panel wide">
+              <div class="panel-heading">
+                <p class="eyebrow">Progression</p>
+                <h2>Objectifs</h2>
+              </div>
+              <div id="questList" class="quest-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Chronique</p>
+                <h2>Journal</h2>
+              </div>
+              <div id="logList" class="log-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="reports" class="view">
+          <div class="split-grid">
+            <section class="panel wide">
+              <div class="panel-heading">
+                <p class="eyebrow">Etat-major</p>
+                <h2>Rapports militaires</h2>
+              </div>
+              <div id="reportCenter"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <p class="eyebrow">Analyse</p>
+                <h2>Priorites tactiques</h2>
+              </div>
+              <div id="reportInsights"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="onboarding" class="onboarding"></div>
+    <div id="rewardBurst" class="reward-burst" aria-live="polite"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

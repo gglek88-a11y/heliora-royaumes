@@ -1,0 +1,156 @@
+{
+  "version": "2026.07.liveops.1",
+  "liveEvents": [
+    {
+      "id": "ball_carnival",
+      "name": "Carnaval des Royaumes",
+      "tag": "Event saisonnier",
+      "endsInHours": 72,
+      "goal": 500,
+      "reward": { "gold": 900, "food": 600, "gems": 80 },
+      "shopSkin": "carnival_castle",
+      "description": "Gagne des points via entrainement, expeditions, aides de guilde et recherches."
+    },
+    {
+      "id": "guild_expedition",
+      "name": "Expedition de guilde",
+      "tag": "GvG simule",
+      "endsInHours": 120,
+      "goal": 800,
+      "reward": { "stone": 700, "wood": 700, "guildCoins": 120 },
+      "shopSkin": "emerald_route",
+      "description": "Accumule des points de rally et grimpe dans le classement d'alliance."
+    },
+    {
+      "id": "forge_week",
+      "name": "Semaine des Forges",
+      "tag": "Rotation boutique",
+      "endsInHours": 96,
+      "goal": 650,
+      "reward": { "gold": 520, "stone": 900, "gems": 55 },
+      "shopSkin": "forge_banner",
+      "description": "Marque des points en forgeant des artefacts et en deployant des troupes de siege."
+    }
+  ],
+  "shopItems": [
+    {
+      "id": "carnival_castle",
+      "name": "Skin Citadelle carnaval",
+      "type": "castle",
+      "price": 120,
+      "bonus": "Production +4%",
+      "event": "ball_carnival"
+    },
+    {
+      "id": "emerald_route",
+      "name": "Skin Route emeraude",
+      "type": "route",
+      "price": 90,
+      "bonus": "Marches +5%",
+      "event": "guild_expedition"
+    },
+    {
+      "id": "solar_army",
+      "name": "Skin Armee solaire",
+      "type": "army",
+      "price": 140,
+      "bonus": "Puissance +3%",
+      "event": "ball_carnival"
+    },
+    {
+      "id": "forge_banner",
+      "name": "Banniere de forge",
+      "type": "army",
+      "price": 110,
+      "bonus": "Siege +3%",
+      "event": "forge_week"
+    },
+    {
+      "id": "starter_pass",
+      "name": "Pass de conquete",
+      "type": "pass",
+      "price": 0,
+      "bonus": "Recompense de progression gratuite"
+    }
+  ],
+  "research": [
+    {
+      "id": "logistics",
+      "name": "Logistique royale",
+      "max": 5,
+      "cost": { "gold": 180, "wood": 120 },
+      "bonus": "Production +5% par niveau"
+    },
+    {
+      "id": "formations",
+      "name": "Doctrine de formation",
+      "max": 5,
+      "cost": { "gold": 220, "food": 120 },
+      "bonus": "Puissance tactique +4% par niveau"
+    },
+    {
+      "id": "engineering",
+      "name": "Ingenierie de siege",
+      "max": 4,
+      "cost": { "gold": 260, "stone": 160 },
+      "bonus": "Beliers et batiments +6% par niveau"
+    },
+    {
+      "id": "diplomacy",
+      "name": "Diplomatie de guilde",
+      "max": 4,
+      "cost": { "gold": 160, "food": 100 },
+      "bonus": "Aide de guilde et rally +5% par niveau"
+    },
+    {
+      "id": "liveops",
+      "name": "Intendance evenementielle",
+      "max": 3,
+      "cost": { "gold": 240, "gems": 20 },
+      "bonus": "Points event +6% par niveau"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "sun_crown",
+      "name": "Couronne solaire",
+      "cost": { "gold": 420, "stone": 220 },
+      "bonus": "Heros +8%",
+      "power": 90
+    },
+    {
+      "id": "forge_core",
+      "name": "Coeur de forge",
+      "cost": { "gold": 380, "wood": 220, "stone": 220 },
+      "bonus": "Siege +12%",
+      "power": 80
+    },
+    {
+      "id": "moon_chart",
+      "name": "Carte lunaire",
+      "cost": { "gold": 500, "energy": 25 },
+      "bonus": "Marches +10%",
+      "power": 110
+    },
+    {
+      "id": "guild_standard",
+      "name": "Etendard d'alliance",
+      "cost": { "gold": 460, "guildCoins": 90 },
+      "bonus": "Rally +9%",
+      "power": 130
+    }
+  ],
+  "guildMembers": [
+    { "name": "Ariane", "rank": "R4", "power": 18400, "status": "Chasse monstres" },
+    { "name": "Bastian", "rank": "R3", "power": 13950, "status": "Pret pour rally" },
+    { "name": "Nora", "rank": "R3", "power": 12220, "status": "Collecte ressources" },
+    { "name": "Ilan", "rank": "R2", "power": 9100, "status": "Aide construction" },
+    { "name": "Selene", "rank": "R2", "power": 8800, "status": "Defense du sanctuaire" }
+  ],
+  "leaderboard": [
+    { "name": "Solaris Prime", "guild": "SPX", "power": 86200 },
+    { "name": "Forge Aegis", "guild": "FGA", "power": 74400 },
+    { "name": "Moon Vale", "guild": "MVL", "power": 69100 },
+    { "name": "Cendre Royale", "guild": "CRX", "power": 64200 }
+  ]
+}
