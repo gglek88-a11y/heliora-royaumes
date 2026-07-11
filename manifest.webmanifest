@@ -1,0 +1,26 @@
+{
+  "name": "Heliora Royaumes",
+  "short_name": "Heliora",
+  "description": "Jeu web de strategie 4X fantasy avec heros, royaume, carte du monde et alliances.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a4d50",
+  "theme_color": "#0f6f68",
+  "categories": ["games", "strategy"],
+  "icons": [
+    {
+      "src": "./pwa-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

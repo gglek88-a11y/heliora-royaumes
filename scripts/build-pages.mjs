@@ -7,6 +7,10 @@ const dist = join(root, "dist");
 const rootFiles = [
   "index.html",
   "styles.css",
+  "manifest.webmanifest",
+  "service-worker.js",
+  "pwa-icon-192.png",
+  "pwa-icon-512.png",
   "hero-reference.png",
   "hero2.png",
   "saya-astral.png",

@@ -3,7 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f6f68" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Heliora" />
     <title>Heliora Royaumes</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./pwa-icon-192.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -15,6 +20,7 @@
           <div id="kingdomSummary" class="kingdom-summary" aria-label="Resume du royaume"></div>
         </div>
         <div class="top-actions">
+          <button id="installAppBtn" class="ghost install-app" type="button" hidden>Installer l'app</button>
           <button id="syncBtn" class="ghost" type="button">Cloud sync</button>
           <button id="saveBtn" class="ghost" type="button">Sauvegarder</button>
           <button id="resetBtn" class="ghost danger" type="button">Recommencer</button>

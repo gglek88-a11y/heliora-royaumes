@@ -34,6 +34,31 @@ npm run backend
 
 Puis cliquer sur `Cloud sync` dans le jeu.
 
+## Installer en PWA
+
+Le jeu est une PWA. Depuis le lien public GitHub Pages, ouvrir le jeu dans Chrome/Edge mobile ou desktop, puis utiliser le bouton `Installer l'app` quand il apparait.
+
+## Brancher Supabase cloud
+
+Le jeu peut synchroniser sauvegardes, guildes, chat et classement avec Supabase.
+
+1. Creer un projet Supabase.
+2. Ouvrir le SQL Editor Supabase.
+3. Executer le contenu de `data/supabase-schema.sql`.
+4. Copier `Project URL` et `anon public key`.
+5. Modifier `data/cloud-config.json` :
+
+```json
+{
+  "provider": "supabase",
+  "apiBaseUrl": "http://127.0.0.1:8787",
+  "supabaseUrl": "https://VOTRE-PROJET.supabase.co",
+  "supabaseAnonKey": "VOTRE_ANON_PUBLIC_KEY"
+}
+```
+
+La cle `anon public` Supabase est faite pour le client web. Ne jamais mettre de cle `service_role` dans ce depot.
+
 ## Publier sur GitHub
 
 Installer Git pour Windows, puis depuis ce dossier :

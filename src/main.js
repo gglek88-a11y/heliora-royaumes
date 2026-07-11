@@ -1,7 +1,13 @@
 const STORAGE_KEY = "heliora-web-kingdom-v1";
-const BACKEND_URL = "http://127.0.0.1:8787";
+const LOCAL_BACKEND_URL = "http://127.0.0.1:8787";
 const HERO_LEVEL_CAP = 60;
 let contentSource = "defaults";
+let cloudConfig = {
+  provider: "local",
+  apiBaseUrl: LOCAL_BACKEND_URL,
+  supabaseUrl: "",
+  supabaseAnonKey: "",
+};
 
 const RESOURCE_LABELS = {
   gold: "Or",
@@ -866,6 +872,7 @@ const elements = {
   logList: $("#logList"),
   reportCenter: $("#reportCenter"),
   reportInsights: $("#reportInsights"),
+  installAppBtn: $("#installAppBtn"),
   syncBtn: $("#syncBtn"),
   saveBtn: $("#saveBtn"),
   resetBtn: $("#resetBtn"),
@@ -883,6 +890,7 @@ let attackPrep = null;
 let worldMapZoom = 1;
 let toastTimer = null;
 let rewardBurstTimer = null;
+let deferredInstallPrompt = null;
 let canvasContext = null;
 let canvasScale = 1;
 let projectedBuildings = [];
@@ -1586,7 +1594,8 @@ async function callBackend(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1600);
   try {
-    const response = await fetch(`${BACKEND_URL}${path}`, {
+    const baseUrl = cloudConfig.apiBaseUrl || LOCAL_BACKEND_URL;
+    const response = await fetch(`${baseUrl}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {
@@ -1603,9 +1612,116 @@ async function callBackend(path, options = {}) {
   }
 }
 
+async function loadCloudConfig() {
+  try {
+    const response = await fetch("./data/cloud-config.json", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const config = await response.json();
+    cloudConfig = {
+      ...cloudConfig,
+      ...config,
+      apiBaseUrl: (config.apiBaseUrl || cloudConfig.apiBaseUrl || LOCAL_BACKEND_URL).replace(/\/$/, ""),
+      supabaseUrl: (config.supabaseUrl || "").replace(/\/$/, ""),
+      supabaseAnonKey: config.supabaseAnonKey || "",
+    };
+  } catch {
+    cloudConfig = { ...cloudConfig, provider: "local" };
+  }
+}
+
+function cloudProviderReady() {
+  if (cloudConfig.provider === "supabase") {
+    return Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
+  }
+  return Boolean(cloudConfig.apiBaseUrl);
+}
+
+async function supabaseRequest(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        apikey: cloudConfig.supabaseAnonKey,
+        Authorization: `Bearer ${cloudConfig.supabaseAnonKey}`,
+        "Content-Type": "application/json",
+        ...(options.headers ?? {}),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Supabase HTTP ${response.status}`);
+    }
+    if (response.status === 204) {
+      return null;
+    }
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function mapLeaderboardRows(rows = []) {
+  return rows.map((row) => ({
+    name: row.name ?? row.player_id ?? "Commandant",
+    guild: row.guild?.name?.slice(0, 3).toUpperCase() ?? row.guild_tag ?? "HDH",
+    power: row.kingdom_power ?? 0,
+  }));
+}
+
+function mapChatRows(rows = []) {
+  return rows.map((row) => ({
+    from: row.from_name ?? "Alliance",
+    text: row.message ?? "",
+    kind: row.kind ?? "",
+    createdAt: row.created_at ? Date.parse(row.created_at) : Date.now(),
+  }));
+}
+
+async function syncSupabase(payload) {
+  const playerName = payload.state?.guild?.name ? `${payload.state.guild.name} Cmd` : "Commandant";
+  await supabaseRequest("/rest/v1/heliora_players?on_conflict=player_id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({
+      player_id: payload.playerId,
+      name: playerName,
+      guild_tag: payload.guild?.name?.slice(0, 3).toUpperCase() ?? "HDH",
+      guild: payload.guild,
+      kingdom_power: payload.kingdomPower,
+      resources: payload.resources,
+      save_state: payload.state,
+      synced_at: new Date().toISOString(),
+    }),
+  });
+
+  const leaderboardRows = await supabaseRequest("/rest/v1/heliora_players?select=player_id,name,guild_tag,guild,kingdom_power&order=kingdom_power.desc&limit=10");
+  let chatRows = [];
+  try {
+    chatRows = await supabaseRequest("/rest/v1/heliora_chat?select=from_name,message,kind,created_at&order=created_at.desc&limit=20");
+  } catch {
+    chatRows = [];
+  }
+
+  return {
+    ok: true,
+    syncedAt: Date.now(),
+    leaderboard: mapLeaderboardRows(leaderboardRows),
+    chat: mapChatRows(chatRows),
+  };
+}
+
 async function loadContentPack() {
   const loaders = [
-    async () => ({ source: "api", pack: await callBackend("/api/content") }),
+    async () => {
+      if (!cloudProviderReady() || cloudConfig.provider === "supabase") {
+        throw new Error("No API content backend");
+      }
+      return { source: cloudConfig.provider === "cloud-api" ? "cloud-api" : "api", pack: await callBackend("/api/content") };
+    },
     async () => {
       const response = await fetch("./data/game-content.json", { cache: "no-store" });
       if (!response.ok) {
@@ -1980,22 +2096,25 @@ function prepareRally() {
 }
 
 async function cloudSync() {
+  const payload = {
+    playerId: state.playerId,
+    kingdomPower: kingdomPower(),
+    guild: state.guild,
+    resources: state.resources,
+    state,
+  };
+
   try {
-    const payload = {
-      playerId: state.playerId,
-      kingdomPower: kingdomPower(),
-      guild: state.guild,
-      resources: state.resources,
-      state,
-    };
-    const result = await callBackend("/api/sync", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    const result = cloudConfig.provider === "supabase" && cloudProviderReady()
+      ? await syncSupabase(payload)
+      : await callBackend("/api/sync", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
     state.backend = {
-      mode: "api",
+      mode: cloudConfig.provider === "supabase" ? "supabase" : "api",
       cloudSyncAt: result.syncedAt ?? Date.now(),
-      status: "API connectee",
+      status: cloudConfig.provider === "supabase" ? "Supabase connecte" : "API connectee",
     };
     if (result.leaderboard) {
       state.leaderboard = result.leaderboard;
@@ -2003,18 +2122,18 @@ async function cloudSync() {
     if (result.chat?.length) {
       state.chat = result.chat.slice(0, 8);
     }
-    addInbox("Cloud sync API", "Sauvegarde envoyee au serveur mock MMO. Classement et chat mis a jour.");
+    addInbox("Cloud sync", "Sauvegarde envoyee au backend cloud. Classement et chat mis a jour.");
     saveGame(false);
-    showReward("Cloud sync API reussi.");
+    showReward("Cloud sync reussi.");
   } catch {
     state.backend = {
       mode: "local",
       cloudSyncAt: Date.now(),
-      status: "API absente, fallback local",
+      status: cloudConfig.provider === "supabase" ? "Supabase non configure" : "API absente, fallback local",
     };
-    addInbox("Cloud sync local", "Aucun serveur API detecte. La sauvegarde locale reste active.");
+    addInbox("Cloud sync local", "Backend cloud indisponible. La sauvegarde locale reste active.");
     saveGame(false);
-    showToast("Backend absent: sauvegarde locale conservee.");
+    showToast("Backend cloud absent: sauvegarde locale conservee.");
   }
   render();
 }
@@ -3593,6 +3712,49 @@ function showReward(message) {
   setTimeout(() => document.body.classList.remove("reward-flash"), 700);
 }
 
+function updateInstallButton() {
+  if (!elements.installAppBtn) {
+    return;
+  }
+  const standalone = window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone;
+  elements.installAppBtn.hidden = standalone || !deferredInstallPrompt;
+}
+
+async function installApp() {
+  if (!deferredInstallPrompt) {
+    showToast("Installation disponible depuis le menu du navigateur.");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  const choice = await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  updateInstallButton();
+  showToast(choice.outcome === "accepted" ? "Installation lancee." : "Installation annulee.");
+}
+
+function setupPwaInstall() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {
+      state.backend.status = "PWA hors ligne indisponible";
+    });
+  }
+
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    updateInstallButton();
+  });
+
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    updateInstallButton();
+    showReward("Heliora installe sur l'appareil.");
+  });
+
+  elements.installAppBtn?.addEventListener("click", installApp);
+  updateInstallButton();
+}
+
 function showRewardBurst(title, reward = {}, heroes = "", rareReward = {}) {
   if (!elements.rewardBurst) {
     return;
@@ -3643,6 +3805,11 @@ function renderLiveOpsBar() {
   const event = cycle.event;
   const progress = eventProgress(event.id);
   const percent = Math.min(100, (progress / event.goal) * 100);
+  const backendLabel = {
+    api: "API cloud",
+    supabase: "Supabase",
+    local: "localStorage",
+  }[state.backend.mode] ?? state.backend.mode;
   elements.liveOpsBar.innerHTML = `
     <article class="live-card">
       <div>
@@ -3650,7 +3817,7 @@ function renderLiveOpsBar() {
         <strong>${event.name}</strong>
         <p>${event.description}</p>
         <p>Fin de rotation: ${formatTime(cycle.endsAt - Date.now())}</p>
-        <p>Backend: ${state.backend.mode === "api" ? "API MMO mock" : "localStorage"} - ${state.backend.status}</p>
+        <p>Backend: ${backendLabel} - ${state.backend.status}</p>
         <p>Contenu: ${contentSource}</p>
       </div>
       <div class="live-progress">
@@ -6497,11 +6664,13 @@ elements.resetBtn.addEventListener("click", () => {
   render();
 });
 
+await loadCloudConfig();
 await loadContentPack();
 state = loadGame();
 selectedNode = getNode(selectedNode)?.id ?? WORLD_NODES[0].id;
 selectedBuilding = getBuilding(selectedBuilding)?.id ?? "castle";
 applyOfflineProgress();
+setupPwaInstall();
 setupKingdomCanvas();
 render();
 setInterval(tick, 1000);
