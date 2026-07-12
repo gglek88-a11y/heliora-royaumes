@@ -1,7 +1,8 @@
-const STORAGE_KEY = "heliora-web-kingdom-v1";
-const AUTH_STORAGE_KEY = "heliora-supabase-session-v1";
-const LOCAL_BACKEND_URL = "http://127.0.0.1:8787";
-const HERO_LEVEL_CAP = 60;
+import { authUserFromSession, loadAuthSession, persistAuthSession } from "./auth/session.js";
+import { HERO_LEVEL_CAP, LOCAL_BACKEND_URL, createDefaultAccountState, createDefaultBackendState, createDefaultGuildState, createPlayerId } from "./game-state/index.js";
+import { cloudProviderReady as isCloudProviderReady, loadCloudConfiguration, requestBackend, requestSupabaseAuth, requestSupabaseRest } from "./networking/network-client.js";
+import { readStoredGame, removeStoredGame, writeStoredGame } from "./storage/index.js";
+
 let contentSource = "defaults";
 let cloudConfig = {
   provider: "local",
@@ -901,7 +902,7 @@ let projectedBuildings = [];
 function createInitialState() {
   const today = todayKey();
   return {
-    playerId: `player-${Math.random().toString(16).slice(2, 10)}`,
+    playerId: createPlayerId(),
     resources: { gold: 420, food: 360, stone: 260, wood: 260, energy: 60, gems: 120, guildCoins: 0 },
     buildings: Object.fromEntries(BUILDINGS.map((building) => [building.id, building.id === "castle" ? 1 : 0])),
     units: Object.fromEntries(UNITS.map((unit) => [unit.id, 0])),
@@ -922,20 +923,7 @@ function createInitialState() {
     inbox: [
       { id: `welcome-${today}`, title: "Bienvenue dans Heliora", body: "Pack de depart disponible.", reward: { gold: 180, food: 160, gems: 20 }, claimed: false },
     ],
-    guild: {
-      id: "",
-      name: "Aube d'Heliora",
-      tag: "HDH",
-      rank: "R3",
-      role: "member",
-      helps: 3,
-      rallyReadyAt: 0,
-      score: 320,
-      lastResetDate: today,
-      cloudMembers: [],
-      invites: [],
-      leaderboard: [],
-    },
+    guild: createDefaultGuildState(today),
     chat: [
       { from: "Ariane", text: "Bienvenue. Lance une aide de guilde avant les gros timers." },
       { from: "Bastian", text: "Rally pret sur les elites de la carte." },
@@ -966,31 +954,21 @@ function createInitialState() {
     claimedQuests: [],
     victories: 0,
     onboardingStep: 0,
-    backend: {
-      mode: "local",
-      cloudSyncAt: 0,
-      status: "Sauvegarde locale",
-    },
-    account: {
-      provider: "local",
-      userId: "",
-      email: "",
-      connectedAt: 0,
-    },
+    backend: createDefaultBackendState(),
+    account: createDefaultAccountState(),
     lastTick: Date.now(),
     log: ["Le royaume d'Heliora s'eveille."],
   };
 }
 
 function loadGame() {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = readStoredGame();
   if (!saved) {
     return createInitialState();
   }
 
   try {
-    const parsed = JSON.parse(saved);
-    return migrateState(parsed);
+    return migrateState(saved);
   } catch {
     return createInitialState();
   }
@@ -1056,7 +1034,7 @@ function migrateState(saved) {
 }
 
 function saveGame(showMessage = false) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, lastTick: Date.now() }));
+  writeStoredGame({ ...state, lastTick: Date.now() });
   if (showMessage) {
     showToast("Sauvegarde effectuee.");
   }
@@ -1505,7 +1483,7 @@ function resolveHarvestMarch(march) {
   saveGame(false);
 }
 
-function completeHarvestReturn(march) {
+async function completeHarvestReturn(march) {
   const node = getNode(march.nodeId);
   if (!node) {
     return;
@@ -1514,9 +1492,16 @@ function completeHarvestReturn(march) {
   const lineup = normalizeHeroLineup(march.lineup);
   const rareReward = harvestRareReward(node, lineup);
   const reward = mergeRewards(march.reward ?? projectedHarvestReward(node, lineup), rareReward);
+  const serverResult = await runServerAction("harvest_return", {
+    nodeId: node.id,
+    reward,
+  }, `${state.playerId}-harvest-${node.id}-${march.startedAt ?? Date.now()}`);
+  const finalReward = serverResult?.reward ?? reward;
   const bonus = harvestHeroBonus(lineup);
   const escortPower = UNITS.reduce((sum, unit) => sum + ((march.unitsAtStart?.[unit.id] ?? 0) * unit.power), 0);
-  addResources(reward);
+  if (!serverResult?.reward) {
+    addResources(finalReward);
+  }
   state.nodeRespawns[node.id] = Date.now() + nodeRespawnMs(node);
   refreshWorldNodes();
   const report = {
@@ -1524,7 +1509,7 @@ function completeHarvestReturn(march) {
     nodeId: node.id,
     node: node.name,
     level: node.level ?? 1,
-    reward,
+    reward: finalReward,
     rareReward,
     lineup,
     heroNames: heroNames(lineup),
@@ -1544,9 +1529,9 @@ function completeHarvestReturn(march) {
   };
   state.harvestReports = [report, ...(state.harvestReports ?? [])].slice(0, 12);
   awardEventPoints(45 + (node.level ?? 1) * 8);
-  addLog(`Convoi revenu de ${node.name}: ${rewardText(reward)}.`);
-  showReward(`Convoi revenu: ${node.name} | ${rewardText(reward)}`);
-  showRewardBurst(`Convoi revenu: ${node.name}`, reward, report.heroNames, rareReward);
+  addLog(`Convoi revenu de ${node.name}: ${rewardText(finalReward)}.`);
+  showReward(`Convoi revenu: ${node.name} | ${rewardText(finalReward)}`);
+  showRewardBurst(`Convoi revenu: ${node.name}`, finalReward, report.heroNames, rareReward);
   saveGame(false);
 }
 
@@ -1617,55 +1602,34 @@ function refreshWorldNodes(now = Date.now()) {
 }
 
 async function callBackend(path, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1600);
-  try {
-    const baseUrl = cloudConfig.apiBaseUrl || LOCAL_BACKEND_URL;
-    const response = await fetch(`${baseUrl}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
+  const headers = {
+    ...(options.headers ?? {}),
+  };
+  if (authToken()) {
+    headers.Authorization = `Bearer ${authToken()}`;
+  } else {
+    headers["X-Dev-User"] = state?.playerId ?? "local-player";
   }
+  return requestBackend(cloudConfig, path, {
+    ...options,
+    headers,
+  });
 }
 
 async function loadCloudConfig() {
-  try {
-    const response = await fetch("./data/cloud-config.json", { cache: "no-store" });
-    if (!response.ok) {
-      return;
-    }
-    const config = await response.json();
-    cloudConfig = {
-      ...cloudConfig,
-      ...config,
-      apiBaseUrl: (config.apiBaseUrl || cloudConfig.apiBaseUrl || LOCAL_BACKEND_URL).replace(/\/$/, ""),
-      supabaseUrl: (config.supabaseUrl || "").replace(/\/$/, ""),
-      supabaseAnonKey: config.supabaseAnonKey || "",
-    };
-  } catch {
-    cloudConfig = { ...cloudConfig, provider: "local" };
-  }
+  cloudConfig = await loadCloudConfiguration(cloudConfig);
 }
 
 function cloudProviderReady() {
-  if (cloudConfig.provider === "supabase") {
-    return Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
-  }
-  return Boolean(cloudConfig.apiBaseUrl);
+  return isCloudProviderReady(cloudConfig);
 }
 
 function supabaseAuthReady() {
   return cloudConfig.provider === "supabase" && cloudProviderReady();
+}
+
+function authoritativeApiReady() {
+  return Boolean(cloudConfig.apiBaseUrl);
 }
 
 function authToken() {
@@ -1673,50 +1637,19 @@ function authToken() {
 }
 
 function saveSupabaseSession(session) {
-  supabaseSession = session?.access_token ? session : null;
-  if (supabaseSession) {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(supabaseSession));
-    return;
-  }
-  localStorage.removeItem(AUTH_STORAGE_KEY);
+  supabaseSession = persistAuthSession(session);
 }
 
 function loadStoredSupabaseSession() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || "null");
-    if (stored?.access_token) {
-      supabaseSession = stored;
-    }
-  } catch {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-  }
+  supabaseSession = loadAuthSession();
 }
 
 function authUser() {
-  return supabaseSession?.user ?? null;
+  return authUserFromSession(supabaseSession);
 }
 
 async function supabaseAuthRequest(path, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
-  try {
-    const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        apikey: cloudConfig.supabaseAnonKey,
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
-    });
-    const payload = response.status === 204 ? null : await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(payload?.error_description || payload?.msg || payload?.message || `Supabase Auth HTTP ${response.status}`);
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return requestSupabaseAuth(cloudConfig, path, options);
 }
 
 async function refreshSupabaseSession() {
@@ -1757,30 +1690,11 @@ async function ensureSupabaseSession() {
 
 async function supabaseRequest(path, options = {}) {
   const { authenticated = false, ...requestOptions } = options;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6000);
-  try {
-    const token = authenticated ? authToken() : cloudConfig.supabaseAnonKey;
-    const response = await fetch(`${cloudConfig.supabaseUrl}${path}`, {
-      ...requestOptions,
-      signal: controller.signal,
-      headers: {
-        apikey: cloudConfig.supabaseAnonKey,
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...(requestOptions.headers ?? {}),
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`Supabase HTTP ${response.status}`);
-    }
-    if (response.status === 204) {
-      return null;
-    }
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+  return requestSupabaseRest(cloudConfig, path, {
+    ...requestOptions,
+    authenticated,
+    accessToken: authToken(),
+  });
 }
 
 function mapLeaderboardRows(rows = []) {
@@ -1806,6 +1720,148 @@ function supabaseEq(value) {
 
 function playerDisplayName() {
   return authUser()?.email?.split("@")[0] || state.account?.email?.split("@")[0] || "Commandant";
+}
+
+function makeIdempotencyKey(type, payload = {}) {
+  const compact = JSON.stringify(payload).slice(0, 160).replace(/[^a-zA-Z0-9_-]/g, "");
+  return `${state.playerId}-${type}-${Date.now()}-${compact}`.slice(0, 120);
+}
+
+function applyAuthoritativeKingdom(kingdom) {
+  if (!kingdom) {
+    return;
+  }
+  state.resources = { ...state.resources, ...kingdom.resources };
+  state.buildings = { ...state.buildings, ...kingdom.buildings };
+  state.units = { ...state.units, ...kingdom.units };
+  state.training = kingdom.training ?? state.training;
+  if (kingdom.guildId) {
+    state.guild.id = kingdom.guildId;
+  }
+  state.backend = {
+    ...state.backend,
+    mode: "authoritative",
+    cloudSyncAt: Date.now(),
+    status: "Serveur autoritaire connecte",
+  };
+}
+
+function applyAuthoritativeGuild(guild) {
+  if (!guild?.id) {
+    return;
+  }
+  state.guild = {
+    ...state.guild,
+    id: guild.id,
+    name: guild.name,
+    tag: guild.tag,
+    role: guild.role ?? state.guild.role,
+    rank: guildRoleRank(guild.role ?? state.guild.role),
+    score: guild.score ?? state.guild.score,
+    cloudMembers: guild.members ?? state.guild.cloudMembers,
+  };
+}
+
+async function ensureAuthoritativeSession() {
+  if (!authoritativeApiReady()) {
+    return false;
+  }
+  if (authToken()) {
+    return true;
+  }
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)/.test(cloudConfig.apiBaseUrl ?? "")) {
+    return true;
+  }
+  if (cloudConfig.provider === "supabase" && cloudProviderReady()) {
+    return ensureSupabaseSession();
+  }
+  return true;
+}
+
+async function syncAuthoritativeState({ create = true, silent = false } = {}) {
+  if (!await ensureAuthoritativeSession()) {
+    return false;
+  }
+  try {
+    const me = await callBackend("/v1/me");
+    applyAuthoritativeKingdom(me.kingdom);
+    applyAuthoritativeGuild(me.guild);
+
+    let kingdom = me.kingdom;
+    if (!kingdom && create) {
+      const created = await callBackend("/v1/kingdom", {
+        method: "POST",
+        body: JSON.stringify({
+          playerName: playerDisplayName(),
+          kingdomName: "Royaume d'Heliora",
+          capitalName: "Citadelle d'Heliora",
+          region: "foret_mystique",
+          heroId: state.activeHero,
+        }),
+      });
+      kingdom = created.kingdom;
+      applyAuthoritativeKingdom(kingdom);
+    }
+
+    const resources = await callBackend("/v1/resources");
+    if (resources.resources) {
+      state.resources = { ...state.resources, ...resources.resources };
+    }
+
+    const leaderboard = await callBackend("/v1/leaderboard").catch(() => null);
+    if (leaderboard?.kingdoms?.length) {
+      state.leaderboard = leaderboard.kingdoms.map((row) => ({
+        name: row.name,
+        guild: "SRV",
+        power: row.power,
+      }));
+    }
+    if (leaderboard?.guilds?.length) {
+      state.guild.leaderboard = leaderboard.guilds.map((guild) => ({
+        id: guild.id,
+        name: guild.name,
+        tag: guild.tag,
+        power: guild.power,
+        score: guild.score,
+        memberCount: guild.memberCount,
+        isOpen: guild.isOpen,
+      }));
+    }
+
+    if (!silent) {
+      showToast("Royaume synchronise avec le serveur autoritaire.");
+    }
+    saveGame(false);
+    return true;
+  } catch {
+    state.backend = {
+      ...state.backend,
+      mode: "local",
+      cloudSyncAt: Date.now(),
+      status: "Serveur autoritaire indisponible",
+    };
+    if (!silent) {
+      showToast("Serveur autoritaire indisponible: mode local conserve.");
+    }
+    return false;
+  }
+}
+
+async function runServerAction(type, payload = {}, idempotencyKey = makeIdempotencyKey(type, payload)) {
+  if (!await ensureAuthoritativeSession()) {
+    return null;
+  }
+  try {
+    const result = await callBackend("/v1/actions", {
+      method: "POST",
+      body: JSON.stringify({ type, idempotencyKey, payload }),
+      timeoutMs: 6000,
+    });
+    applyAuthoritativeKingdom(result.kingdom);
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 function guildTagFromName(name = "") {
@@ -2043,7 +2099,7 @@ async function signOutSupabase() {
     }
   }
   saveSupabaseSession(null);
-  state.account = { provider: "local", userId: "", email: "", connectedAt: 0 };
+  state.account = createDefaultAccountState();
   state.backend = { ...state.backend, mode: "local", status: "Session deconnectee, sauvegarde locale active" };
   saveGame(false);
   showToast("Compte deconnecte.");
@@ -2061,7 +2117,7 @@ async function initializeAuthState() {
   const valid = await ensureSupabaseSession();
   const user = authUser();
   if (!valid || !user?.id) {
-    state.account = { provider: "local", userId: "", email: "", connectedAt: 0 };
+    state.account = createDefaultAccountState();
     saveGame(false);
     return;
   }
@@ -2311,10 +2367,20 @@ function addInbox(title, body, reward = null) {
   ].slice(0, 12);
 }
 
-function claimDailyReward() {
+async function claimDailyReward() {
   const today = todayKey();
   if (state.claimedLoginDate === today) {
     showToast("Recompense quotidienne deja reclamee.");
+    return;
+  }
+  const serverResult = await runServerAction("claim_reward", { rewardId: "daily_login", day: today });
+  if (serverResult?.reward) {
+    state.claimedLoginDate = today;
+    awardEventPoints(60);
+    addInbox("Connexion quotidienne", `Recompense serveur recue: ${rewardText(serverResult.reward)}.`);
+    showReward(`Bonus quotidien serveur: ${rewardText(serverResult.reward)}`);
+    saveGame(false);
+    render();
     return;
   }
   const reward = { gold: 240, food: 240, energy: 20, gems: 25 };
@@ -2337,10 +2403,19 @@ function claimInboxReward(id) {
   render();
 }
 
-function claimEventReward(eventId) {
+async function claimEventReward(eventId) {
   const event = LIVE_EVENTS.find((item) => item.id === eventId);
   const claimKey = eventClaimKey(eventId);
   if (!event || state.claimedEvents.includes(claimKey) || eventProgress(eventId) < event.goal) {
+    return;
+  }
+  const serverResult = await runServerAction("claim_reward", { rewardId: "event_reward", eventId });
+  if (serverResult?.reward) {
+    state.claimedEvents.push(claimKey);
+    addInbox(`${event.name} termine`, `Recompense serveur: ${rewardText(serverResult.reward)}.`);
+    showReward(`Event serveur termine: ${rewardText(serverResult.reward)}`);
+    saveGame(false);
+    render();
     return;
   }
   addResources(event.reward);
@@ -2462,14 +2537,29 @@ async function ensureCloudGuildAction() {
 
 async function createCloudGuild(event) {
   event.preventDefault();
-  if (!await ensureCloudGuildAction()) {
-    return;
-  }
   const formData = new FormData(event.currentTarget);
   const name = String(formData.get("guildName") || "").trim().slice(0, 42);
   const tag = String(formData.get("guildTag") || guildTagFromName(name)).trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
   if (name.length < 3 || tag.length < 2) {
     showToast("Nom de guilde et tag trop courts.");
+    return;
+  }
+  if (await ensureAuthoritativeSession()) {
+    try {
+      const result = await callBackend("/v1/guilds", {
+        method: "POST",
+        body: JSON.stringify({ name, tag, description: "Alliance fondee depuis Heliora Royaumes.", isOpen: true }),
+      });
+      applyAuthoritativeGuild({ ...result.guild, role: result.role, members: result.members });
+      saveGame(false);
+      showReward(`Guilde serveur ${result.guild.tag} creee.`);
+      render();
+      return;
+    } catch {
+      showToast("Serveur guilde indisponible, tentative Supabase directe.");
+    }
+  }
+  if (!await ensureCloudGuildAction()) {
     return;
   }
   try {
@@ -2513,6 +2603,18 @@ async function createCloudGuild(event) {
 }
 
 async function joinCloudGuild(guildId) {
+  if (await ensureAuthoritativeSession()) {
+    try {
+      const result = await callBackend(`/v1/guilds/${encodeURIComponent(guildId)}/join`, { method: "POST" });
+      applyAuthoritativeGuild({ ...result.guild, role: result.role, members: result.members });
+      await syncAuthoritativeState({ create: true, silent: true });
+      showReward(`Tu as rejoint ${result.guild.name}.`);
+      render();
+      return;
+    } catch {
+      showToast("Jonction serveur indisponible, tentative Supabase directe.");
+    }
+  }
   if (!await ensureCloudGuildAction()) {
     return;
   }
@@ -2544,14 +2646,27 @@ async function joinCloudGuild(guildId) {
 
 async function inviteCloudGuildMember(event) {
   event.preventDefault();
-  if (!await ensureCloudGuildAction() || !state.guild.id || !canManageGuild()) {
-    showToast("Seuls les chefs/officiers peuvent inviter.");
-    return;
-  }
   const formData = new FormData(event.currentTarget);
   const email = String(formData.get("inviteEmail") || "").trim().toLowerCase();
   if (!email.includes("@")) {
     showToast("Email invalide.");
+    return;
+  }
+  if (await ensureAuthoritativeSession() && state.guild.id && canManageGuild()) {
+    try {
+      await callBackend(`/v1/guilds/${encodeURIComponent(state.guild.id)}/invites`, {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      showReward("Invitation serveur envoyee.");
+      render();
+      return;
+    } catch {
+      showToast("Invitation serveur indisponible, tentative Supabase directe.");
+    }
+  }
+  if (!await ensureCloudGuildAction() || !state.guild.id || !canManageGuild()) {
+    showToast("Seuls les chefs/officiers peuvent inviter.");
     return;
   }
   try {
@@ -2624,6 +2739,27 @@ async function leaveCloudGuild() {
 }
 
 async function refreshCloudGuilds() {
+  if (await ensureAuthoritativeSession()) {
+    try {
+      const result = await callBackend("/v1/guilds");
+      applyAuthoritativeGuild(result.ownGuild);
+      state.guild.leaderboard = (result.guilds ?? []).map((guild) => ({
+        id: guild.id,
+        name: guild.name,
+        tag: guild.tag,
+        power: guild.power,
+        score: guild.score,
+        memberCount: guild.memberCount,
+        isOpen: guild.isOpen,
+      }));
+      await syncAuthoritativeState({ create: true, silent: true });
+      showToast("Guildes serveur actualisees.");
+      render();
+      return;
+    } catch {
+      showToast("Serveur guilde indisponible, tentative Supabase directe.");
+    }
+  }
   if (!await ensureCloudGuildAction()) {
     return;
   }
@@ -2637,9 +2773,19 @@ async function refreshCloudGuilds() {
   render();
 }
 
-function requestGuildHelp() {
+async function requestGuildHelp() {
   if (state.guild.helps <= 0) {
     showToast("Aides de guilde epuisees pour le moment.");
+    return;
+  }
+  const serverResult = await runServerAction("guild_help", { guildId: state.guild.id });
+  if (serverResult?.guild) {
+    state.guild.score = serverResult.guild.score ?? state.guild.score;
+    state.guild.helps -= 1;
+    awardEventPoints(45, "guild_expedition");
+    showToast("Aide de guilde validee par serveur.");
+    saveGame(false);
+    render();
     return;
   }
   state.guild.helps -= 1;
@@ -2663,6 +2809,13 @@ function prepareRally() {
 }
 
 async function cloudSync() {
+  if (await syncAuthoritativeState({ create: true, silent: true })) {
+    addInbox("Serveur autoritaire", "Etat royaume, ressources, guildes et classements synchronises depuis /v1.");
+    showReward("Serveur autoritaire synchronise.");
+    render();
+    return;
+  }
+
   if (cloudConfig.provider === "supabase" && cloudProviderReady() && !await ensureSupabaseSession()) {
     state.backend = {
       mode: "local",
@@ -2787,13 +2940,23 @@ function missingCostText(cost) {
     .join(", ");
 }
 
-function upgradeBuilding(id) {
+async function upgradeBuilding(id) {
   const building = getBuilding(id);
   const castleLevel = state.buildings.castle;
   const currentLevel = state.buildings[id] ?? 0;
 
   if (id !== "castle" && currentLevel >= castleLevel) {
     showToast("Ameliore d'abord la Citadelle.");
+    return;
+  }
+
+  const serverResult = await runServerAction("upgrade_building", { buildingId: id });
+  if (serverResult?.kingdom) {
+    awardEventPoints(90);
+    addLog(`${building.name} passe au niveau ${serverResult.level ?? state.buildings[id]} par serveur.`);
+    showReward(`${building.name} ameliore par serveur.`);
+    saveGame(false);
+    render();
     return;
   }
 
@@ -2809,11 +2972,21 @@ function upgradeBuilding(id) {
   render();
 }
 
-function trainUnit(unitId, amount) {
+async function trainUnit(unitId, amount) {
   const unit = getUnit(unitId);
   const barracksLevel = state.buildings.barracks ?? 0;
   if (barracksLevel <= 0) {
     showToast("Construis une Caserne pour former des troupes.");
+    return;
+  }
+
+  const serverResult = await runServerAction("train_units", { unitId, amount });
+  if (serverResult?.kingdom) {
+    awardEventPoints(amount * 2);
+    addLog(`Entrainement serveur termine: ${amount} ${unit.name}.`);
+    showReward(`${amount} ${unit.name} formes par serveur.`);
+    saveGame(false);
+    render();
     return;
   }
 
@@ -4081,14 +4254,73 @@ function startMarch(nodeId, rally = false, unitSelection = null, lineupSelection
   render();
 }
 
-function resolveMarch(march) {
+async function resolveMarch(march) {
   const node = getNode(march.nodeId);
   if (march.mode === "harvest") {
     resolveHarvestMarch(march);
     return;
   }
-  const attackPower = Math.max(1, march.powerAtStart ?? battlePowerAgainst(node));
   const formation = getFormation(march.formation ?? state.selectedFormation);
+  const serverResult = await runServerAction("resolve_battle", {
+    node: {
+      id: node.id,
+      name: node.name,
+      power: node.power,
+      type: node.type,
+      enemyFormation: node.enemyFormation,
+      reward: node.reward,
+    },
+    formation: formation.id,
+    units: march.unitsAtStart ?? state.units,
+    heroPower: heroSquadPower(march.lineup ?? state.heroLineup) + artifactPower(),
+  }, `${state.playerId}-battle-${march.nodeId}-${march.startedAt ?? Date.now()}`);
+
+  if (serverResult?.report) {
+    const serverReport = serverResult.report;
+    const xpGained = combatXpReward(node, serverReport.victory, serverReport.attackPower);
+    const xpUpdates = awardHeroXp(xpGained, march.lineup ?? state.heroLineup);
+    const recommendations = battleRecommendations(node, formation, serverReport.victory, serverReport.losses ?? {}, march);
+    const report = {
+      id: serverReport.id ?? `${Date.now()}-${node.id}`,
+      node: node.name,
+      victory: serverReport.victory,
+      formation: formation.name,
+      enemyFormation: getFormation(node.enemyFormation).name,
+      attackPower: serverReport.attackPower,
+      rawPower: serverReport.attackPower,
+      skillPower: 0,
+      enemyPower: serverReport.enemyPower ?? node.power,
+      losses: serverReport.losses ?? {},
+      heroStrikes: [],
+      armorBreak: 0,
+      mitigation: 0,
+      africanPowerTier: africanPowerSetBonus(march.lineup ?? state.heroLineup).tier,
+      recommendations,
+      reward: serverResult.reward ?? serverReport.reward ?? {},
+      xpGained,
+      xpUpdates,
+      serverAuthoritative: true,
+      createdAt: Date.now(),
+    };
+    state.battleReports = [report, ...state.battleReports].slice(0, 5);
+    if (serverReport.victory) {
+      state.nodeRespawns[node.id] = Date.now() + nodeRespawnMs(node);
+      refreshWorldNodes();
+      state.victories += 1;
+      awardEventPoints(110 + Math.floor(node.power / 10));
+      awardEventPoints(80, "guild_expedition");
+      addLog(`Victoire serveur a ${node.name}. Butin: ${rewardText(report.reward)}.`);
+      showReward(`Victoire serveur: ${node.name} | ${rewardText(report.reward)}`);
+    } else {
+      awardEventPoints(25);
+      addLog(`Defaite serveur a ${node.name}.`);
+      showToast(`Defaite serveur contre ${node.name}.`);
+    }
+    saveGame(false);
+    render();
+    return;
+  }
+  const attackPower = Math.max(1, march.powerAtStart ?? battlePowerAgainst(node));
   const heroTactics = heroCombatSequence(march, node);
   const roll = 0.9 + Math.random() * 0.22;
   const skillPower = heroTactics.totalDamage * (1 + heroTactics.armorBreak) + node.power * heroTactics.control * 0.18;
@@ -7427,7 +7659,7 @@ elements.resetBtn.addEventListener("click", () => {
   if (!confirm("Recommencer le royaume depuis le debut ?")) {
     return;
   }
-  localStorage.removeItem(STORAGE_KEY);
+  removeStoredGame();
   state = createInitialState();
   selectedBuilding = "castle";
   selectedNode = WORLD_NODES[0].id;
@@ -7440,6 +7672,7 @@ state = loadGame();
 selectedNode = getNode(selectedNode)?.id ?? WORLD_NODES[0].id;
 selectedBuilding = getBuilding(selectedBuilding)?.id ?? "castle";
 await initializeAuthState();
+await syncAuthoritativeState({ create: true, silent: true });
 applyOfflineProgress();
 setupPwaInstall();
 setupKingdomCanvas();

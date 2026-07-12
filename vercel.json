@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/health",
+      "destination": "/api/index.mjs"
+    },
+    {
+      "source": "/v1/:path*",
+      "destination": "/api/index.mjs"
+    }
+  ]
+}

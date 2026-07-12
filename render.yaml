@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: heliora-authoritative-server
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run server:authoritative
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HELIORA_STORAGE_PROVIDER
+        value: supabase
+      - key: HELIORA_DEV_AUTH
+        value: "false"
+      - key: HOST
+        value: 0.0.0.0
+      - key: CORS_ORIGINS
+        value: https://gglek88-a11y.github.io,http://127.0.0.1:5176
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
